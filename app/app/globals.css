@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #05070b;
+  --panel: rgba(12, 16, 24, 0.78);
+  --line: rgba(212, 175, 55, 0.18);
+  --gold: #d4af37;
+  --ink: #e8edf7;
+}
+
+html,
+body {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  font-family: "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  background-image:
+    radial-gradient(1200px 500px at 10% -10%, rgba(212, 175, 55, 0.12), transparent 55%),
+    radial-gradient(900px 400px at 90% 0%, rgba(56, 189, 248, 0.08), transparent 50%),
+    linear-gradient(180deg, #070a10 0%, #05070b 40%, #04060a 100%);
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(16px);
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.range {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22c55e, #eab308 55%, #ef4444);
+  outline: none;
+}
+
+.range::-webkit-slider-thumb {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #f8fafc;
+  border: 3px solid #d4af37;
+  box-shadow: 0 0 0 6px rgba(212, 175, 55, 0.15);
+  cursor: pointer;
+}
+
+.wallet-adapter-button {
+  background: #d4af37 !important;
+  color: #111 !important;
+  font-weight: 700 !important;
+  border-radius: 999px !important;
+  height: 40px !important;
+}
