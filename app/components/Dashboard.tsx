@@ -791,7 +791,7 @@ export function Dashboard() {
           <div>
             <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Catch</h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Borrow USDC against PreStocks. Liquidations never hit the book.
+              Borrow USDC against PreStocks. A Stability Pool catches liquidations.
             </p>
           </div>
         </div>

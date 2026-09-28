@@ -9,7 +9,7 @@ Lending, the Stability Pool, and liquidation are **the same on-chain program**.
 | **PreStocks tokens** | e.g. `Pren1FvF…` (ANTHROPIC) | Collateral mints |
 | **PreStocks API + DEX TWAP** | posted on-chain | Restricted-mode oracle |
 
-The protocol itself never swaps on a DEX. Liquidations are absorbed by a pre-funded Stability Pool (or an external liquidator). See [`DEPLOY.md`](DEPLOY.md) and [`../doc1.md`](../doc1.md).
+The protocol itself never swaps on a DEX. Liquidations are absorbed by a pre-funded Stability Pool (or an external liquidator). See [`DEPLOY.md`](DEPLOY.md).
 
 ## Roles
 
@@ -57,7 +57,7 @@ Stability Pool: −$3,000 USDC, +4.4 tokens
 Lender vault:   +$3,000, made whole
 ```
 
-Class A example (when a Pyth key is available) is in `doc1.md` §5: $4,000 borrow at 40% LTV, seize 5.5, surplus 4.5.
+Class A (when a Pyth key is available): 40% borrow LTV / 50% liquidation. Example at $1,000: deposit 10 tokens ($10,000), borrow $4,000; at $800 seize 5.5, surplus 4.5.
 
 ## Staleness policy
 

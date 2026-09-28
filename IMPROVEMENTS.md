@@ -64,7 +64,7 @@ Next:
 1. **Pyth pull** for `Equity.Index.ANTHROPIC/USD` and `OPENAI/USD` once a `pyth-indices` key exists. On-chain: verify the VAA, enforce staleness (300s) and max confidence.
 2. **Keep DEX TWAP** as the second leg (Meteora DLMM / Jupiter). Never let a single source inflate collateral.
 3. **Price used** stays `min(index, twap, mark)` (or `min` of whatever is live). Show the user which source won — the current panel already does this for posted values.
-4. **Switch the market class** restricted → Class A automatically when Pyth is fresh: 30/40 → 40/50 is the existing table in `doc1.md`.
+4. **Switch the market class** restricted → Class A automatically when Pyth is fresh: 30/40 → 40/50.
 5. **Kill `set_test_price` on mainnet.** Test-mode override is a demo switch, not a production primitive.
 
 ---
@@ -96,7 +96,7 @@ position LTV ≥ liq_ltv
 - **SP first** — no book, no slippage, buyers already opted in (Liquity / Hubble / Prisma). This is the whole point of Catch.
 - **DEX second, not first** — Aave-style close only for the slice the book can take at ≤5%. Never dump the whole bag into a $200k pool.
 - **Auction third** — Maker Clipper / crvUSD-style Dutch: price starts at oracle and decays. Attracts discretionary buyers when both the pool and the book are short.
-- **Halt last** — same as Maker liquidation 3.0 “unfilled” and Aave supply caps: stop writing new debt.
+
 
 Each branch should emit which path ran, so the NFT / UI can say “caught by pool” vs “trimmed on DEX” vs “in auction”.
 

@@ -1,86 +1,65 @@
-# Catch (program: prelend)
+# Catch
 
-Lending against pre-IPO tokens is not blocked by missing code. It is blocked by liquidation capacity: a few hundred thousand dollars of DEX liquidity per asset, and until 17 September 2026 no oracle at all. PreLend addresses both.
+Lock PreStocks, borrow USDC, keep the upside. A Stability Pool is funded first so it can take the liquidation.
 
-A Stability Pool recruits and funds buyers *before* they are needed, so liquidations never hit the order book. Debt is capped by what the system can actually absorb. Collateral is valued at `min(PreStocks markPrice, DEX TWAP)` so a token trading at a discount is valued at the discount.
+Catch is over-collateralized lending for [PreStocks](https://prestocks.com) on Solana. Built for [Stocklana](https://stocklana.com). Live on **devnet**.
 
-Built for the Stocklana hackathon: PreStocks collateral, Stability Pool liquidation, Pyth-ready oracle panel.
+If you hold ANTHROPIC and need dollars, you should not have to sell it.
 
-## Day-0 oracle decision (22 Sep 2026)
+## How it works
 
+Three roles, one market.
+
+| | What you do | What you get |
+|---|---|---|
+| **Borrower** | Lock ANTHROPIC, take USDC (max 30% LTV) | Dollars without selling. 12% APR. Liquidation at 40% |
+| **Lender** | Supply USDC to the vault | Share of the 12% borrowers pay |
+| **Stability Pool** | Park USDC before anyone is liquidated | Seized tokens at a 10% discount |
+
+When a loan crosses 40% LTV the pool repays the debt and takes the collateral.
+
+The protocol takes **0.5%** once, when the loan opens. Interest goes to lenders.
+
+Collateral is valued at `min(PreStocks mark, DEX TWAP)`. A demo drop (−10/−20/−30/−40%) writes a test price on-chain so you can watch LTV and the loan NFT move.
+
+Loan health is a cNFT: **Chad VC** → **Anxious Trader** → **McPepe** → **Rekt**.
+
+## Parameters
+
+| | |
+|---|---|
+| Max borrow LTV | 30% |
+| Liquidation LTV | 40% |
+| Borrower APR | 12% (to lenders) |
+| Protocol fee | 0.5% on borrow |
+| SP bonus | 10% |
+| Debt cap | Stability Pool USDC + DEX depth at 5% impact |
+| Program | `HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd` |
+
+## Run
+
+```bash
+cd app
+cp .env.example .env.local
+npm install
+npm run dev
 ```
-ANTHROPIC market class : restricted (pyth-indices key needed for Class A)
-pyth feed id           : 0x5da511a7c68b17a3bc94380cab4756bc83ab87f86307af10ea58467a64b6689d
-unit scale             : unknown (price data gated — cannot verify)
-staleness limit        : 300s (enforced on posted prices)
-max confidence         : untestable
-TWAP source            : posted (Meteora DLMM ANTHROPIC/SOL $204k liq)
-dex pool               : EZyszDEx1LZDt7TsSFV8xdPi49sDKC3mdfv2MVMEQLtU
-initial depth          : $171,258 (171 tokens at ≤5% impact via Jupiter)
-admin debt cap         : 25,000 USDC (restricted)
-max LTV                : 30%
-liquidation LTV        : 40%
-```
 
-`Equity.Index.ANTHROPIC/USD` exists on Hermes but is paywalled (`pyth-indices` group). The old push oracle has no live equity/index prices. Until a key upgrade, markets run **restricted**: posted PreStocks mark + posted DEX TWAP, LTV 25/35.
-
-Script: `npx tsx scripts/verify-oracle.ts`
+Open http://localhost:3000. Phantom on **devnet**.
 
 ## Repo
 
 ```
-programs/prelend   Anchor 1.1 program
-app                Next.js dashboard + metadata API
-scripts            oracle verification
-DEPLOY.md          deploy + bootstrap
+programs/prelend   Anchor program (vaults, LTV, Stability Pool, liquidation)
+app                Next.js dashboard
+scripts            oracle helpers
 ```
 
-### Program instructions (target)
+Deploy / bootstrap: [`DEPLOY.md`](DEPLOY.md). Layout: [`ARCHITECTURE.md`](ARCHITECTURE.md). What we would ship next: [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
 
-| Instruction | Who | What |
-|---|---|---|
-| `initialize_pool` | admin | GlobalConfig + risk params + USDC vault |
-| `update_oracle` | admin/keeper | Post markPrice and/or DEX TWAP |
-| `update_depth` | admin/keeper | Post Jupiter ≤5% impact depth |
-| `deposit_liquidity` / `withdraw_liquidity` | lenders | USDC in/out of the lender vault |
-| `borrow_usdc` | borrower | lock PreStocks, borrow ≤ max LTV, check debt cap |
-| `repay_and_withdraw` | borrower | repay USDC + accrued interest, unlock collateral |
-| `init_stability_pool` | admin | per-mint Stability Pool |
-| `deposit_stability` | anyone | deposit USDC, receive shares |
-| `request_withdrawal` / `claim_withdrawal` | depositor | cooldown then in-kind USDC + collateral |
-| `liquidate` | anyone | partial seize, surplus to borrower, SP absorbs |
-| `external_liquidate` | anyone | same math, liquidator pays USDC if SP is short |
-| `claim_surplus_collateral` | borrower | withdraw leftover collateral after liquidation |
-| `set_test_price` | admin | on-chain test-mode price override (devnet) |
-| `set_paused` | admin | block new borrows (IPO / conversion window) |
+## Honest limits
 
-Loan-health card metadata: `/api/nft/metadata?position=…&ltv=…&symbol=ANTHROPIC`.
-
-Thresholds: Chad VC &lt; 30%, Anxious 30–35%, McPepe 35–40%, Rekt at 40% (liquidated).
-
-Post-hackathon roadmap: [`../IMPROVEMENTS.md`](../IMPROVEMENTS.md).
-
-## Run the demo
-
-```bash
-cd prelend/app
-npm install
-npm run dev
-# open http://localhost:3000
-```
-
-Connect Phantom on the same cluster as `NEXT_PUBLIC_SOLANA_RPC_URL`. Default is **devnet**.
-
-To make **Pool USDC** the on-chain `usdc-vault` balance, follow [`DEPLOY.md`](DEPLOY.md).
-
-## Limitations (stated plainly)
-
-- An empty Stability Pool with no external liquidator can still produce bad debt.
-- Pyth pre-IPO indices exist but are gated; this build uses posted PreStocks mark + DEX TWAP.
-- Depth measurement is trusted (posted by admin/keeper).
-- Only two PreStocks assets have Pyth Index feeds (ANTHROPIC, OPENAI); neither is readable with a crypto-only key.
-- The code is unaudited.
-
-## Architecture
-
-Lending, Stability Pool, and liquidation are the **same program**. Diagrams: [`ARCHITECTURE.md`](ARCHITECTURE.md). Change request: [`../doc1.md`](../doc1.md).
+- An empty Stability Pool can still produce bad debt.
+- Oracle and DEX depth are posted (keeper). Pyth pre-IPO indices exist but are gated.
+- Test-mode price and +1 month are demo switches. Not for mainnet.
+- Unaudited.
