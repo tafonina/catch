@@ -3,22 +3,25 @@
 import Image from "next/image";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey, type Keypair, type Transaction } from "@solana/web3.js";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  BORROW_APR,
   LIQUIDATION_LTV,
   MAX_BORROW_LTV,
   PREVIEW_MAX_LTV,
+  formatAprPct,
   healthFactor,
   ltvFromParts,
+  marketYields,
+  engageBids,
   stateForPosition,
+  type BidRow,
 } from "@/lib/loan";
+import { ISOLATED_MARKETS, marketLabel, type MarketTab } from "@/lib/markets";
 import { RESTRICTED_ORACLE, type PreStock } from "@/lib/prestocks";
 import { buildDepositTx } from "@/lib/deposit-client";
 import {
   buildBorrowTx,
   buildClaimStabilityTx,
-  buildClaimSurplusTx,
   buildLiquidateTx,
   buildMigrateSpTx,
   buildRepayTx,
@@ -45,12 +48,16 @@ import {
   writeStoredNft,
 } from "@/lib/loan-nft";
 import { explorerAccount } from "@/lib/cluster";
+import { isDemoWalletActive } from "@/lib/demo-wallets";
 import { MOCK_ANTHROPIC, positionPda } from "@/lib/prelend";
-import { readLoanHistory, upsertLoanRecord, type LoanRecord } from "@/lib/loan-history";
+import { PriceQuote, tokenLabel } from "@/components/PriceQuote";
 import { WalletConnect } from "@/components/WalletConnect";
+import { MarketDetails } from "@/components/MarketDetails";
+import { recordMarketSnapshot } from "@/lib/market-history";
 
-function formatUsd(n: number, digits = 2) {
-  return n.toLocaleString("en-US", {
+function formatUsd(n: number | null | undefined, digits = 2) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: digits,
@@ -62,26 +69,36 @@ function floorUsd(n: number, decimals = 6) {
   return Math.floor(n * f + 1e-9) / f;
 }
 
-function formatCompact(n: number) {
+function formatCompact(n: number | null | undefined) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
   return Intl.NumberFormat("en-US", {
     notation: "compact",
     maximumFractionDigits: 1,
-  }).format(n);
+  }).format(Number(n));
 }
 
-export function Dashboard() {
+export function Dashboard({
+  marketId = "anthropic",
+  initialTab = "lend",
+  onBack,
+}: {
+  marketId?: string;
+  initialTab?: MarketTab;
+  onBack?: () => void;
+}) {
   const { connection } = useConnection();
   const { publicKey, connected, signTransaction } = useWallet();
   const [stocks, setStocks] = useState<PreStock[]>([]);
-  const [symbol, setSymbol] = useState("ANTHROPIC");
-  const [collateral, setCollateral] = useState(10);
+  const listed = ISOLATED_MARKETS.find((m) => m.id === marketId) ?? ISOLATED_MARKETS[0];
+  const [symbol, setSymbol] = useState(listed.base);
+  const [collateralInput, setCollateralInput] = useState("10");
   const [ltvSlider, setLtvSlider] = useState(0.18);
   const [priceShock, setPriceShock] = useState(1);
-  const [poolUsdc, setPoolUsdc] = useState(250_000);
   const [lendInput, setLendInput] = useState("");
   const [lendMode, setLendMode] = useState<"deposit" | "withdraw">("deposit");
   const [spInput, setSpInput] = useState("");
-  const [tab, setTab] = useState<"lend" | "borrow" | "stability">("lend");
+  const [bidDiscount, setBidDiscount] = useState(10);
+  const [tab, setTab] = useState<MarketTab>(initialTab);
   const [deposited, setDeposited] = useState(0);
   const [usdcWallet, setUsdcWallet] = useState(0);
   const [borrowedUi, setBorrowedUi] = useState(0);
@@ -90,9 +107,7 @@ export function Dashboard() {
   const [loanDebt, setLoanDebt] = useState(0);
   const [loanPrincipal, setLoanPrincipal] = useState(0);
   const [loanCollateral, setLoanCollateral] = useState(0);
-  const [loanSurplus, setLoanSurplus] = useState(0);
   const [loanLiquidated, setLoanLiquidated] = useState(false);
-  const [loanHistory, setLoanHistory] = useState<LoanRecord[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [vaultOnChain, setVaultOnChain] = useState<number | null>(null);
   const [vaultMint, setVaultMint] = useState<string | null>(null);
@@ -100,6 +115,7 @@ export function Dashboard() {
   const [collateralMint, setCollateralMint] = useState<string | null>(null);
   const [spUsdc, setSpUsdc] = useState(0);
   const [spCollateral, setSpCollateral] = useState(0);
+  const [bidRows, setBidRows] = useState<BidRow[]>([]);
   const [mySpUsdc, setMySpUsdc] = useState(0);
   const [mySpClaimable, setMySpClaimable] = useState(0);
   const [spNeedsMigrate, setSpNeedsMigrate] = useState(false);
@@ -147,6 +163,13 @@ export function Dashboard() {
     return () => window.clearInterval(id);
   }, []);
 
+  useEffect(() => {
+    const senior = poolValueUi > 0 ? poolValueUi : (vaultOnChain ?? 0) + borrowedUi;
+    if (senior <= 0 && borrowedUi <= 0) return;
+    const y = marketYields({ borrowed: borrowedUi, senior, book: spUsdc });
+    recordMarketSnapshot(listed.id, { t: Date.now(), util: y.util, borrowApr: y.borrowApr });
+  }, [listed.id, borrowedUi, poolValueUi, vaultOnChain, spUsdc]);
+
   async function fetchPre() {
     const res = await fetch("/api/prestocks");
     const data = (await res.json()) as PreStock[];
@@ -191,6 +214,26 @@ export function Dashboard() {
     const data = await res.json();
     if (gen !== vaultFetch.current) return;
     if ((activeKey()?.toBase58() ?? null) !== expected) return;
+    if (data.stability) {
+      const bookUi =
+        (Number(data.stability.totalUsdc) + Number(data.stability.legacyUsdc || 0)) / 1e6;
+      setSpUsdc(bookUi);
+      setSpCollateral(
+        (Number(data.stability.collateralHeld) + Number(data.stability.legacyColl || 0)) / 1e9,
+      );
+      const owners = Array.isArray(data.stability.owners) ? data.stability.owners : [];
+      const amounts = Array.isArray(data.stability.bidUsdc) ? data.stability.bidUsdc : [];
+      const discs = Array.isArray(data.stability.discountBps) ? data.stability.discountBps : [];
+      setBidRows(
+        owners
+          .map((owner: string, i: number) => ({
+            owner,
+            usdc: Number(amounts[i] ?? 0) / 1e6,
+            discountBps: Number(discs[i] ?? 0),
+          }))
+          .filter((row: BidRow) => row.usdc > 0),
+      );
+    }
     if (data.initialized && typeof data.uiAmount === "number") {
       setVaultOnChain(data.uiAmount);
       setVaultMint(typeof data.mint === "string" ? data.mint : null);
@@ -207,23 +250,12 @@ export function Dashboard() {
       setUsdcWallet(typeof data.usdcWalletUi === "number" ? data.usdcWalletUi : 0);
       setBorrowedUi(typeof data.totalBorrowedUi === "number" ? data.totalBorrowedUi : 0);
       {
-        const depth = typeof data.postedDepthUi === "number" ? data.postedDepthUi : 0;
-        const sp = data.stability
-          ? (Number(data.stability.totalUsdc) + Number(data.stability.legacyUsdc || 0)) / 1e6
-          : 0;
-        setDebtCapUi(sp + depth);
+        const sp = data.stability ? Number(data.stability.totalUsdc) / 1e6 : 0;
+        setDebtCapUi(sp);
       }
       setPoolValueUi(typeof data.poolValueUi === "number" ? data.poolValueUi : 0);
       setCollWallet(typeof data.collateralWalletUi === "number" ? data.collateralWalletUi : 0);
       setActiveWallet(typeof data.wallet === "string" ? data.wallet : null);
-      if (data.stability) {
-        setSpUsdc(
-          (Number(data.stability.totalUsdc) + Number(data.stability.legacyUsdc || 0)) / 1e6,
-        );
-        setSpCollateral(
-          (Number(data.stability.collateralHeld) + Number(data.stability.legacyColl || 0)) / 1e9,
-        );
-      }
       if (data.spPosition) {
         setMySpUsdc(Number(data.spPosition.usdcUi) || 0);
         setMySpClaimable(Number(data.spPosition.claimableUi) || 0);
@@ -242,7 +274,6 @@ export function Dashboard() {
       setLoanDebt(typeof data.loanDebtUi === "number" ? data.loanDebtUi : 0);
       setLoanPrincipal(typeof data.loanPrincipalUi === "number" ? data.loanPrincipalUi : 0);
       setLoanCollateral(typeof data.loanCollateralUi === "number" ? data.loanCollateralUi : 0);
-      setLoanSurplus(typeof data.loanClaimableUi === "number" ? data.loanClaimableUi : 0);
       setLastAccrualTs(typeof data.lastAccrualTs === "number" ? data.lastAccrualTs : 0);
       if (typeof data.testModePriceE6 === "number" && data.testModePriceE6 > 0) {
         const test = data.testModePriceE6 / 1e6;
@@ -259,35 +290,6 @@ export function Dashboard() {
       }
       const nextPosition = typeof data.positionAddress === "string" ? data.positionAddress : null;
       setPositionAddr(data.position ? nextPosition : null);
-      if (expected) {
-        if (posOpen && nextPosition) {
-          setLoanHistory(
-            upsertLoanRecord(expected, {
-              position: nextPosition,
-              symbol: listedSymbol,
-              status: "open",
-              collateral: typeof data.loanCollateralUi === "number" ? data.loanCollateralUi : 0,
-              principal: typeof data.loanPrincipalUi === "number" ? data.loanPrincipalUi : 0,
-              surplus: 0,
-              at: Date.now(),
-            }),
-          );
-        } else if (posLiq && nextPosition) {
-          setLoanHistory(
-            upsertLoanRecord(expected, {
-              position: nextPosition,
-              symbol: listedSymbol,
-              status: "liquidated",
-              collateral: typeof data.loanCollateralUi === "number" ? data.loanCollateralUi : 0,
-              principal: typeof data.loanPrincipalUi === "number" ? data.loanPrincipalUi : 0,
-              surplus: typeof data.loanClaimableUi === "number" ? data.loanClaimableUi : 0,
-              at: Date.now(),
-            }),
-          );
-        } else {
-          setLoanHistory(readLoanHistory(expected));
-        }
-      }
       if (key && data.position && nextPosition) {
         try {
           const found = await findLoanNft(connection, key, nextPosition);
@@ -310,7 +312,7 @@ export function Dashboard() {
         phantom?: { solana?: { isConnected?: boolean; connect: () => Promise<unknown> } };
       }
     ).phantom?.solana;
-    if (injected && !injected.isConnected) await injected.connect();
+    if (!isDemoWalletActive() && injected && !injected.isConnected) await injected.connect();
     await sendWithPhantom({
       connection,
       tx,
@@ -361,11 +363,13 @@ export function Dashboard() {
   }
 
   const selected = stocks.find((s) => s.symbol === symbol) ?? stocks[0];
-  const listedSymbol = "ANTHROPIC";
+  const listedSymbol = listed.base;
   const isListed = (selected?.symbol ?? listedSymbol) === listedSymbol;
+  const collateral = Number(collateralInput);
+  const collateralAmt = Number.isFinite(collateral) && collateral > 0 ? collateral : 0;
   const livePrice = (selected?.tokenPrice ?? 0) * priceShock;
   const quotePrice = isListed && oraclePrice > 0 ? oraclePrice : livePrice;
-  const collateralValue = collateral * quotePrice;
+  const collateralValue = collateralAmt * quotePrice;
   const previewLtv = Math.min(Math.max(ltvSlider, 0), PREVIEW_MAX_LTV);
   const borrowLtv = Math.min(previewLtv, MAX_BORROW_LTV);
   const overBorrowCap = previewLtv > MAX_BORROW_LTV + 1e-9;
@@ -373,13 +377,21 @@ export function Dashboard() {
   const borrowAmount = collateralValue * borrowLtv;
   const remainingDebtCap = Math.max(0, debtCapUi - borrowedUi);
   const overDebtCap = borrowAmount > remainingDebtCap + 1e-6;
-  const ltv = ltvFromParts(borrowAmount, collateral, quotePrice);
+  const ltv = ltvFromParts(borrowAmount, collateralAmt, quotePrice);
+  const cashUi = vaultOnChain ?? 0;
+  const poolTotal = poolValueUi > 0 ? poolValueUi : cashUi;
+  const yields = marketYields({ borrowed: borrowedUi, senior: poolTotal, book: spUsdc });
+  const utilization = yields.util;
+  const marketApr = yields.borrowApr;
+  const lenderApr = yields.depositApr;
   const elapsed = lastAccrualTs > 0 ? Math.max(0, nowTs - lastAccrualTs) : 0;
   const displayDebt =
     borrowedOpen && loanDebt > 0
-      ? loanDebt * (1 + BORROW_APR * (elapsed / 31_536_000))
+      ? loanDebt * (1 + marketApr * (elapsed / 31_536_000))
       : loanDebt;
-  const liveMark = selected ? Math.min(selected.markPrice, selected.tokenPrice) : 0;
+  const liveMark = selected
+    ? Math.min(selected.markPrice, selected.tokenPrice || selected.markPrice)
+    : 0;
   const dropFromLive =
     liveMark > 0 && testModePrice > 0
       ? Math.round((1 - testModePrice / liveMark) * 100)
@@ -391,13 +403,14 @@ export function Dashboard() {
   const nft = stateForPosition(liveLtv, loanLiquidated);
   const health = healthFactor(liveLtv);
   const loanInterest = Math.max(0, displayDebt - loanPrincipal);
-  const cashUi = vaultOnChain ?? 0;
-  const poolTotal = poolValueUi > 0 ? poolValueUi : cashUi + borrowedUi;
-  const utilization = poolTotal > 0 ? Math.min(1, borrowedUi / poolTotal) : 0;
-  const lenderApr = BORROW_APR * utilization;
   const withdrawable = Math.min(deposited, cashUi);
   const lendAmount = Number(lendInput);
   const spAmount = Number(spInput);
+  const liveBids = engageBids(bidRows, borrowedUi);
+  const myWallet = activeWallet ?? activeKey()?.toBase58() ?? null;
+  const myBid = liveBids.find((b) => b.owner === myWallet);
+  const myFree = myBid?.free ?? 0;
+  const ceilingUsed = spUsdc > 0 ? Math.min(1, borrowedUi / spUsdc) : 0;
 
   function ping(message: string) {
     setToast(message);
@@ -407,7 +420,7 @@ export function Dashboard() {
   async function onLend() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
-    if (!vaultMint) return ping("Pool unavailable");
+    if (!vaultMint || !collateralMint) return ping("Pool unavailable");
     const amount = Number(lendInput);
     if (!(amount > 0)) return ping("Enter a deposit amount.");
     if (amount > usdcWallet + 1e-9) return ping("Not enough USDC in wallet");
@@ -417,6 +430,7 @@ export function Dashboard() {
         connection,
         lender: key,
         usdcMint: new PublicKey(vaultMint),
+        collateralMint: new PublicKey(collateralMint),
         uiAmount: amount,
       });
       await signSend(tx);
@@ -433,7 +447,7 @@ export function Dashboard() {
   async function onWithdraw() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
-    if (!vaultMint) return ping("Pool unavailable");
+    if (!vaultMint || !collateralMint) return ping("Pool unavailable");
     const amount = floorUsd(Math.min(Number(lendInput), withdrawable));
     if (!(amount > 0)) return ping("Enter an amount.");
     if (Number(lendInput) > withdrawable + 1e-6) return ping("Only your idle pool cash can be withdrawn");
@@ -444,6 +458,7 @@ export function Dashboard() {
           connection,
           lender: key,
           usdcMint: new PublicKey(vaultMint),
+          collateralMint: new PublicKey(collateralMint),
           uiAmount: amount,
         }),
       );
@@ -472,7 +487,7 @@ export function Dashboard() {
           usdcMint: new PublicKey(vaultMint),
           collateralMint: new PublicKey(collateralMint),
           feeRecipient: new PublicKey(feeRecipient),
-          collateralUi: collateral,
+          collateralUi: collateralAmt,
           borrowUi: borrowAmount,
         }),
       );
@@ -516,19 +531,6 @@ export function Dashboard() {
       }
       setBorrowedOpen(false);
       setPriceShock(1);
-      if (positionAddr && walletId()) {
-        setLoanHistory(
-          upsertLoanRecord(walletId(), {
-            position: positionAddr,
-            symbol: listedSymbol,
-            status: "repaid",
-            collateral: loanCollateral,
-            principal: loanPrincipal,
-            surplus: 0,
-            at: Date.now(),
-          }),
-        );
-      }
       await fetchVault();
       ping("Repaid");
     } catch (err) {
@@ -545,12 +547,13 @@ export function Dashboard() {
     setBusy("drop");
     try {
       const used = selected
-        ? Math.min(selected.markPrice, selected.tokenPrice)
+        ? Math.min(selected.markPrice, selected.tokenPrice || selected.markPrice)
         : 1032;
       const shock = 1 - dropPct / 100;
       await signSend(
         buildSetTestPriceTx({
           caller: key,
+          collateralMint: new PublicKey(collateralMint),
           priceE6: BigInt(Math.round(used * shock * 1e6)),
         }),
       );
@@ -570,7 +573,14 @@ export function Dashboard() {
     if (!key) return ping("Connect wallet");
     setBusy("drop");
     try {
-      await signSend(buildSetTestPriceTx({ caller: key, priceE6: 0n }));
+      if (!collateralMint) return ping("Pool unavailable");
+      await signSend(
+        buildSetTestPriceTx({
+          caller: key,
+          collateralMint: new PublicKey(collateralMint),
+          priceE6: 0n,
+        }),
+      );
       setPriceShock(1);
       setTestModePrice(0);
       await fetchVault();
@@ -585,11 +595,13 @@ export function Dashboard() {
   async function warpOneMonth() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
+    if (!collateralMint) return ping("Pool unavailable");
     setBusy("drop");
     try {
       await signSend(
         buildWarpAccrualTx({
           caller: key,
+          collateralMint: new PublicKey(collateralMint),
           extraSecs: 2_628_000n,
         }),
       );
@@ -619,19 +631,6 @@ export function Dashboard() {
       );
       setBorrowedOpen(false);
       setLoanLiquidated(true);
-      if (positionAddr && walletId()) {
-        setLoanHistory(
-          upsertLoanRecord(walletId(), {
-            position: positionAddr,
-            symbol: listedSymbol,
-            status: "liquidated",
-            collateral: loanCollateral,
-            principal: loanPrincipal,
-            surplus: loanSurplus,
-            at: Date.now(),
-          }),
-        );
-      }
       if (positionAddr) {
         try {
           await burnLoanNft(key, positionAddr);
@@ -648,45 +647,19 @@ export function Dashboard() {
     }
   }
 
-  async function onClaimSurplus(row: LoanRecord) {
-    const key = activeKey();
-    if (!key) return ping("Connect wallet");
-    if (!collateralMint) return ping("Pool unavailable");
-    setBusy("claim");
-    try {
-      await signSend(
-        await buildClaimSurplusTx({
-          connection,
-          borrower: key,
-          collateralMint: new PublicKey(collateralMint),
-        }),
-      );
-      setLoanHistory(
-        upsertLoanRecord(key.toBase58(), {
-          ...row,
-          status: "claimed",
-          surplus: 0,
-          at: Date.now(),
-        }),
-      );
-      setLoanLiquidated(false);
-      setLoanSurplus(0);
-      await fetchVault();
-      ping(`Claimed ${row.surplus.toFixed(4)} ${row.symbol}`);
-    } catch (err) {
-      fail(err, "Claim failed");
-    } finally {
-      setBusy(null);
-    }
-  }
-
   async function onSpDeposit() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
     if (!vaultMint || !collateralMint) return ping("Pool unavailable");
     if (!(spAmount > 0)) return ping("Enter an amount.");
+    const discountBps = myBid ? myBid.discountBps : Math.round(bidDiscount * 100);
     setBusy("sp");
     try {
+      await fetch("/api/prelend/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ wallet: key.toBase58(), token: "sol" }),
+      });
       await fetch("/api/prelend/crank", { method: "POST" });
       await signSend(
         await buildStabilityDepositTx({
@@ -695,23 +668,37 @@ export function Dashboard() {
           usdcMint: new PublicKey(vaultMint),
           collateralMint: new PublicKey(collateralMint),
           uiAmount: spAmount,
+          discountBps,
         }),
       );
       setSpInput("");
       await fetchVault();
-      ping(`Backstop ${formatUsd(spAmount)}`);
+      ping(`Bid ${formatUsd(spAmount)} at −${bidDiscount}%`);
     } catch (err) {
-      fail(err, "Stability deposit failed");
+      fail(err, "Bid failed");
     } finally {
       setBusy(null);
     }
   }
 
-  async function onSpWithdraw() {
+  async function onSpWithdraw(requested?: number) {
     const key = activeKey();
     if (!key || !vaultMint || !collateralMint) return;
-    const amt = spAmount > 0 ? spAmount : mySpUsdc;
-    if (!(amt > 0)) return ping("Nothing to withdraw");
+    const mine = engageBids(bidRows, borrowedUi).find((b) => b.owner === key.toBase58());
+    const free = mine?.free ?? 0;
+    if (free <= 0) {
+      return ping(
+        (mine?.engaged ?? 0) > 0
+          ? "This bid is covering loans. Only the idle tail can leave."
+          : "Nothing to withdraw",
+      );
+    }
+    const want = requested && requested > 0 ? requested : spAmount > 0 ? spAmount : free;
+    const amt = floorUsd(Math.min(want, free));
+    if (!(amt > 0)) return ping("Nothing idle to withdraw");
+    if (want > free + 1e-6) {
+      ping(`Only ${formatUsd(free)} is idle — the rest covers ${formatUsd(borrowedUi)} borrowed`);
+    }
     setBusy("sp");
     try {
       await signSend(
@@ -725,7 +712,7 @@ export function Dashboard() {
       );
       setSpInput("");
       await fetchVault();
-      ping(`Withdrew ${formatUsd(amt)}`);
+      ping(amt + 1e-6 >= (mine?.usdc ?? 0) ? "Bid removed" : `Withdrew ${formatUsd(amt)}`);
     } catch (err) {
       fail(err, "Withdraw failed");
     } finally {
@@ -791,37 +778,100 @@ export function Dashboard() {
           <div>
             <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Catch</h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Borrow USDC against PreStocks. A Stability Pool catches liquidations.
+              Isolated markets. Credit is capped by the bid book in that pool only.
             </p>
           </div>
         </div>
-        <WalletConnect />
+        <WalletConnect
+          usdc={usdcWallet}
+          anthropic={collWallet}
+          onChanged={() => void fetchVault()}
+          onRole={(next) =>
+            setTab(next === "borrower" ? "borrow" : next === "bidder" ? "stability" : "lend")
+          }
+        />
       </header>
 
-      <section className="mb-6 grid gap-3 sm:grid-cols-4">
+      <div className="mb-6">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-1 text-xs uppercase tracking-widest text-slate-500 hover:text-amber-200"
+          >
+            ← Markets
+          </button>
+        ) : null}
+        <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">{marketLabel(listed)}</h2>
+        <p className="mt-1 max-w-xl text-sm text-slate-400">
+          Isolated pool. LTV and rates apply only here. Credit is capped by this bid book.
+        </p>
+      </div>
+
+      <section className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <Metric
-          label="Pool USDC"
-          value={formatUsd(poolTotal > 0 ? poolTotal : (vaultOnChain ?? poolUsdc), 0)}
+          label="Total supply"
+          value={formatUsd(poolTotal > 0 ? poolTotal : (vaultOnChain ?? 0), 0)}
+          hint={`${(utilization * 100).toFixed(0)}% utilized`}
         />
-        <Metric label="Idle cash" value={formatUsd(cashUi, 0)} />
-        <Metric label="Max borrow LTV" value="30%" />
-        <Metric label="Liquidation LTV" value="40%" />
+        <Metric label="Borrowed USDC" value={formatUsd(borrowedUi, 0)} />
+        <Metric
+          label="Bid book"
+          value={formatUsd(spUsdc, 0)}
+          hint={`${(ceilingUsed * 100).toFixed(0)}% utilized`}
+        />
+        <Metric
+          label="Max / Liq LTV"
+          value={
+            <>
+              30% /{" "}
+              <span className="group relative inline cursor-help border-b border-dotted border-amber-200/70">
+                40%
+                <span className="pointer-events-none absolute left-1/2 top-full z-20 mt-2 hidden w-56 -translate-x-1/2 rounded-2xl border border-white/10 bg-[#0c1018] p-3 text-left text-[11px] font-normal normal-case leading-snug tracking-normal text-slate-300 shadow-xl group-hover:block">
+                  Partial liquidation down to Max LTV (30%).
+                </span>
+              </span>
+            </>
+          }
+        />
+        <Metric label="Borrow APY" value={formatAprPct(marketApr)} />
+        <Metric
+          label="Price"
+          value={
+            selected ? (
+              <PriceQuote
+                mark={selected.markPrice}
+                token={selected.tokenPrice}
+                display={testModePrice > 0 ? testModePrice : undefined}
+                test={testModePrice > 0}
+                name={tokenLabel(selected.name)}
+                className={testModePrice > 0 ? "text-red-300" : "text-sky-300"}
+              />
+            ) : (
+              "—"
+            )
+          }
+          hint={selected ? tokenLabel(selected.name) : listedSymbol}
+        />
       </section>
 
-      <nav className="mb-6 flex flex-wrap gap-2">
+      <nav className="mb-6 flex flex-wrap gap-8 border-b border-white/10">
         {(
           [
             ["lend", "Lend"],
             ["borrow", "Borrow"],
-            ["stability", "Stability"],
+            ["stability", "Bids"],
+            ["details", "Market details"],
           ] as const
         ).map(([id, label]) => (
           <button
             key={id}
             type="button"
             onClick={() => setTab(id)}
-            className={`rounded-full px-4 py-2 text-sm ${
-              tab === id ? "bg-amber-400 font-semibold text-black" : "panel text-slate-300"
+            className={`-mb-px border-b-2 pb-3 text-xl ${
+              tab === id
+                ? "border-white font-semibold text-white"
+                : "border-transparent text-slate-500 hover:text-slate-300"
             }`}
           >
             {label}
@@ -829,16 +879,27 @@ export function Dashboard() {
         ))}
       </nav>
 
+      {tab === "details" && (
+        <MarketDetails
+          marketId={listed.id}
+          borrowed={borrowedUi}
+          senior={poolTotal}
+          book={spUsdc}
+          yields={yields}
+        />
+      )}
+
       {tab === "lend" && (
         <section className="panel max-w-3xl rounded-3xl p-5">
           <div className="mb-2 flex items-center justify-between">
             <h2 className="text-xl">Earn on USDC</h2>
-            <span className="mono text-xs text-emerald-400">up to {(BORROW_APR * 100).toFixed(0)}%</span>
+            <span className="mono text-lg text-emerald-400">APY {formatAprPct(lenderApr)}</span>
           </div>
           <p className="mb-4 text-sm text-slate-400">
-            Supply USDC. Borrowers pay {(BORROW_APR * 100).toFixed(0)}% APR; you earn a share —
-            now {(lenderApr * 100).toFixed(1)}% with {(utilization * 100).toFixed(0)}% of the pool
-            borrowed.
+            Senior vault. Borrow APY is kinked: 10% at 0% used → 15% at 80% → 30% full. Deposit APY
+            is your share of that interest after the 10% reserve and the 5% senior floor, split
+            with engaged bids. Now {formatAprPct(lenderApr)} deposit with{" "}
+            {(utilization * 100).toFixed(0)}% utilized.
           </p>
           <div className="mb-4 grid gap-3 sm:grid-cols-2">
             <Stat label="Your position" value={userReady ? formatUsd(deposited, 2) : "…"} />
@@ -921,120 +982,12 @@ export function Dashboard() {
       {tab === "borrow" && (
       <section className="grid items-start gap-6 lg:grid-cols-[1.1fr_0.9fr]">
         <div className="space-y-6">
-          <div className="panel rounded-3xl p-5">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-xl">Collateral markets</h2>
-              <span className="mono text-xs text-slate-500">
-                {listedSymbol}
-                {activeDrop ? ` −${activeDrop}%` : " live"}
-              </span>
-            </div>
-            <p className="mb-4 text-sm text-slate-400">
-              Pick a token. Only listed markets can be borrowed against.
-            </p>
-            <div className="grid gap-2 sm:grid-cols-4">
-              {stocks.map((s) => {
-                const listed = s.symbol === listedSymbol;
-                const openHere = listed && borrowedOpen;
-                const active = s.symbol === selected?.symbol;
-                return (
-                  <button
-                    key={s.symbol}
-                    type="button"
-                    onClick={() => {
-                      setSymbol(s.symbol);
-                      if (!listed) setPriceShock(1);
-                    }}
-                    className={`rounded-2xl border px-3 py-2 text-left text-sm ${
-                      active
-                        ? "border-amber-400 bg-amber-400/10"
-                        : "border-white/10 bg-black/20"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="font-semibold">{s.symbol}</span>
-                      <span
-                        className={`mono text-[10px] ${
-                          openHere
-                            ? "text-emerald-300"
-                            : listed
-                              ? "text-amber-300"
-                              : "text-slate-500"
-                        }`}
-                      >
-                        {openHere ? "Open" : listed ? "Listed" : "Soon"}
-                      </span>
-                    </div>
-                    <div className="mono text-[11px] text-slate-300">
-                      {listed && testModePrice > 0 ? (
-                        <span>
-                          <span className="text-red-300">{formatUsd(testModePrice)}</span>
-                          <span className="ml-1 text-slate-500 line-through">
-                            {formatUsd(s.tokenPrice)}
-                          </span>
-                        </span>
-                      ) : (
-                        formatUsd(s.tokenPrice)
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {loanHistory.length > 0 ? (
-          <div className="panel rounded-3xl p-5">
-            <h2 className="mb-3 text-xl">Your loans</h2>
-            <div className="space-y-2">
-              {loanHistory.map((row) => (
-                <div
-                  key={row.position}
-                  className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-black/30 px-3 py-3"
-                >
-                  <div>
-                    <div className="text-sm font-semibold">{row.symbol}</div>
-                    <div className="mono text-[11px] text-slate-400">
-                      {row.status === "open"
-                        ? `Open · ${row.collateral.toFixed(2)} locked · borrowed ${formatUsd(row.principal, 0)}`
-                        : row.status === "liquidated"
-                          ? `Liquidated · leftover ${row.surplus.toFixed(4)} ${row.symbol}`
-                          : row.status === "claimed"
-                            ? "Closed · leftover claimed"
-                            : "Repaid"}
-                    </div>
-                  </div>
-                  {row.status === "liquidated" ? (
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={() => void onClaimSurplus(row)}
-                      className="rounded-xl bg-amber-400 px-4 py-2 text-sm font-semibold text-black disabled:opacity-50"
-                    >
-                      {busy === "claim"
-                        ? "Claiming…"
-                        : row.surplus > 0
-                          ? `Claim leftover ${row.surplus.toFixed(2)}`
-                          : "Close loan"}
-                    </button>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-            {loanLiquidated ? (
-              <p className="mt-3 text-xs text-slate-500">
-                Claim leftover to close this loan and borrow {listedSymbol} again.
-              </p>
-            ) : null}
-          </div>
-          ) : null}
-
           {isListed && borrowedOpen ? (
           <div className="panel rounded-3xl p-5">
             <div className="mb-1 flex items-center justify-between">
               <h2 className="text-xl">Your {listedSymbol} loan</h2>
-              <span className="mono text-xs text-sky-300">
-                {(BORROW_APR * 100).toFixed(0)}% APR · Liq 40%
+              <span className="mono text-lg text-sky-300">
+                {formatAprPct(marketApr)} APR · Liq 40%
               </span>
             </div>
             {liveLtv >= LIQUIDATION_LTV ? (
@@ -1087,7 +1040,7 @@ export function Dashboard() {
           <div className="panel rounded-3xl p-5">
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-xl">Open a {selected?.symbol ?? listedSymbol} loan</h2>
-              <span className="mono text-xs text-sky-300">{(BORROW_APR * 100).toFixed(0)}% APR</span>
+              <span className="mono text-lg text-sky-300">{formatAprPct(marketApr)} APR</span>
             </div>
             <p className="mb-4 text-sm text-slate-400">
               Lock {selected?.symbol ?? listedSymbol}, borrow USDC up to 30% LTV. You repay debt plus
@@ -1096,12 +1049,15 @@ export function Dashboard() {
             <label className="text-xs text-slate-500">
               Collateral ({selected?.symbol ?? "PreStock"} · wallet {collWallet.toFixed(2)})
               <input
-                type="number"
-                min={0}
-                step={0.1}
+                type="text"
+                inputMode="decimal"
+                placeholder="0"
                 className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-white"
-                value={collateral}
-                onChange={(e) => setCollateral(Number(e.target.value))}
+                value={collateralInput}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  if (next === "" || /^\d*\.?\d*$/.test(next)) setCollateralInput(next);
+                }}
               />
             </label>
             <div className="mt-5">
@@ -1140,7 +1096,7 @@ export function Dashboard() {
             <div className="mt-5">
               <button
                 onClick={() => void onBorrow()}
-                disabled={overBorrowCap || overDebtCap || busy !== null || !(collateral > 0)}
+                disabled={overBorrowCap || overDebtCap || busy !== null || !(collateralAmt > 0)}
                 className={`rounded-xl px-5 py-2 font-semibold disabled:opacity-50 ${
                   overBorrowCap || overDebtCap
                     ? "cursor-not-allowed bg-white/20 text-slate-400"
@@ -1155,8 +1111,7 @@ export function Dashboard() {
               </button>
               {overDebtCap ? (
                 <p className="mt-3 text-xs text-amber-300">
-                  Outstanding debt cannot exceed {formatUsd(debtCapUi, 0)} (Stability Pool + DEX
-                  depth). Lower LTV or lock less collateral.
+                  Outstanding debt cannot exceed {formatUsd(debtCapUi, 0)} (locked bids). Lower LTV or lock less collateral.
                 </p>
               ) : null}
             </div>
@@ -1194,6 +1149,49 @@ export function Dashboard() {
             )}
           </div>
           )}
+
+          <div className="panel rounded-3xl p-5">
+            <h2 className="mb-4 text-xl">
+              Market <span className="text-base font-normal text-slate-500">(for demo)</span>
+            </h2>
+            <p className="mb-3 text-sm text-slate-400">
+              Borrow APY is kinked (now {formatAprPct(marketApr)}). Max LTV 30% and liquidation at
+              40% apply only to this pool. Liquidation trims back to 30%.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {([10, 20, 30, 40] as const).map((pct) => {
+                const active = activeDrop === pct;
+                return (
+                  <button
+                    key={pct}
+                    onClick={() => void simulateDrop(pct)}
+                    disabled={busy !== null}
+                    className={`rounded-xl px-4 py-2 font-semibold disabled:opacity-50 ${
+                      active
+                        ? "bg-red-500 text-white"
+                        : "border border-red-400/50 bg-red-500/15 text-red-100"
+                    }`}
+                  >
+                    −{pct}%
+                  </button>
+                );
+              })}
+              <button
+                onClick={() => void resetOracle()}
+                disabled={busy !== null}
+                className="rounded-xl border border-slate-500 px-4 py-2 font-semibold text-slate-200 disabled:opacity-50"
+              >
+                Reset oracle
+              </button>
+              <button
+                onClick={() => void warpOneMonth()}
+                disabled={busy !== null}
+                className="rounded-xl border border-amber-400/50 bg-amber-400/15 px-4 py-2 font-semibold text-amber-100 disabled:opacity-50"
+              >
+                +1 month
+              </button>
+            </div>
+          </div>
         </div>
 
         <div className="space-y-6">
@@ -1273,133 +1271,197 @@ export function Dashboard() {
               ) : null}
             </div>
           </div>
-
-          <div className="panel rounded-3xl p-5">
-            <h2 className="mb-4 text-xl">Market</h2>
-            <p className="mb-3 text-sm text-slate-400">
-              Borrowers pay {(BORROW_APR * 100).toFixed(0)}% APR. Max LTV 30%. Liquidation at 40%.
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {([10, 20, 30, 40] as const).map((pct) => {
-                const active = activeDrop === pct;
-                return (
-                  <button
-                    key={pct}
-                    onClick={() => void simulateDrop(pct)}
-                    disabled={busy !== null}
-                    className={`rounded-xl px-4 py-2 font-semibold disabled:opacity-50 ${
-                      active
-                        ? "bg-red-500 text-white"
-                        : "border border-red-400/50 bg-red-500/15 text-red-100"
-                    }`}
-                  >
-                    −{pct}%
-                  </button>
-                );
-              })}
-              <button
-                onClick={() => void resetOracle()}
-                disabled={busy !== null}
-                className="rounded-xl border border-slate-500 px-4 py-2 font-semibold text-slate-200 disabled:opacity-50"
-              >
-                Reset oracle
-              </button>
-              <button
-                onClick={() => void warpOneMonth()}
-                disabled={busy !== null}
-                className="rounded-xl border border-amber-400/50 bg-amber-400/15 px-4 py-2 font-semibold text-amber-100 disabled:opacity-50"
-              >
-                +1 month
-              </button>
-            </div>
-          </div>
         </div>
       </section>
       )}
 
       {tab === "stability" && (
-      <section className="panel max-w-3xl rounded-3xl p-5">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-xl">Stability Pool</h2>
-          <span className="mono text-[11px] text-sky-300">10% liquidation bonus</span>
-        </div>
-        <p className="mb-4 text-sm text-slate-400">
-          Deposit USDC to absorb future liquidations. After a liquidation your USDC shrinks and
-          you can claim the seized PreStocks at a 10% discount. New deposits do not buy tokens
-          already sitting in the pool.
-        </p>
-        <div className="mb-4 space-y-2">
-          <div className="grid grid-cols-2 gap-3">
-            <Stat label="Pool USDC" value={formatUsd(spUsdc, 0)} />
-            <Stat label="Unclaimed in pool" value={`${spCollateral.toFixed(2)} ANTH`} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Stat label="Your USDC" value={formatUsd(mySpUsdc)} />
-            <Stat label="Claimable" value={`${mySpClaimable.toFixed(4)} ANTH`} />
-          </div>
-        </div>
-        {spNeedsMigrate ? (
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
-            <p className="text-sm text-amber-100">
-              Upgrade this wallet from the old share ledger. Every old depositor must do this
-              once.
+      <section className="grid items-start gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+        <div className="space-y-6">
+          <div className="panel rounded-3xl p-5">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-xl">Place a bid</h2>
+              <span className="mono text-lg text-amber-200">
+                Bid APY {formatAprPct(yields.bidApr)}
+              </span>
+            </div>
+            <p className="mb-4 text-sm text-slate-400">
+              Lock USDC at a discount. Tightest bids fill first and become the loan ceiling.
             </p>
-            <button
-              onClick={() => void onSpMigrate()}
-              disabled={busy !== null}
-              className="rounded-xl bg-amber-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
-            >
-              Upgrade position
-            </button>
-          </div>
-        ) : spBlocked ? (
-          <p className="mb-4 text-sm text-amber-200">
-            New deposits wait until leftover share positions are upgraded.
-          </p>
-        ) : null}
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="min-w-[10rem] flex-1 text-xs text-slate-500">
-              Amount
-              <input
-                type="number"
-                inputMode="decimal"
-                placeholder="0"
-                className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-base text-white"
-                value={spInput}
-                min={0}
-                onChange={(e) => setSpInput(e.target.value)}
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <Stat label="Bid book" value={formatUsd(spUsdc, 0)} hint="Debt ceiling" />
+              <Stat
+                label="Ceiling used"
+                value={`${(ceilingUsed * 100).toFixed(0)}%`}
+                hint={`${formatUsd(borrowedUi, 0)} borrowed`}
               />
-            </label>
-            <button
-              type="button"
-              onClick={() => setSpInput(mySpUsdc > 0 ? String(mySpUsdc) : "")}
-              className="mb-0.5 text-xs text-sky-300"
-            >
-              Max
-            </button>
-            <button
-              onClick={() => void onSpDeposit()}
-              disabled={busy !== null || !(spAmount > 0) || spBlocked}
-              className="rounded-xl bg-sky-400 px-5 py-2 font-semibold text-black disabled:opacity-50"
-            >
-              Deposit
-            </button>
-            <button
-              onClick={() => void onSpWithdraw()}
-              disabled={busy !== null || mySpUsdc <= 0}
-              className="rounded-xl border border-white/20 px-5 py-2 disabled:opacity-50"
-            >
-              Withdraw
-            </button>
+              <Stat label="Unfilled room" value={formatUsd(Math.max(0, spUsdc - borrowedUi), 0)} />
+            </div>
+            {spNeedsMigrate ? (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-400/40 bg-amber-400/10 px-4 py-3">
+                <p className="text-sm text-amber-100">
+                  Upgrade this wallet from the old share ledger once.
+                </p>
+                <button
+                  onClick={() => void onSpMigrate()}
+                  disabled={busy !== null}
+                  className="rounded-xl bg-amber-400 px-4 py-2 font-semibold text-black disabled:opacity-50"
+                >
+                  Upgrade position
+                </button>
+              </div>
+            ) : spBlocked ? (
+              <p className="mb-4 text-sm text-amber-200">
+                New deposits wait until leftover share positions are upgraded.
+              </p>
+            ) : null}
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="min-w-[10rem] flex-1 text-xs text-slate-500">
+                Amount
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0"
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-base text-white"
+                  value={spInput}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next === "" || /^\d*\.?\d*$/.test(next)) setSpInput(next);
+                  }}
+                />
+              </label>
+              <label className="w-24 text-xs text-slate-500">
+                Discount
+                <select
+                  className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 px-2 py-2 text-base text-white disabled:opacity-60"
+                  value={myBid ? Math.round(myBid.discountBps / 100) : bidDiscount}
+                  disabled={Boolean(myBid)}
+                  onChange={(e) => setBidDiscount(Number(e.target.value))}
+                >
+                  {(myBid ? [Math.round(myBid.discountBps / 100)] : [10, 15, 20, 25, 30]).map(
+                    (pct) => (
+                      <option key={pct} value={pct}>
+                        {pct}%
+                      </option>
+                    ),
+                  )}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => setSpInput(usdcWallet > 0 ? String(floorUsd(usdcWallet)) : "")}
+                className="mb-0.5 text-xs text-sky-300"
+              >
+                Max
+              </button>
+              <button
+                onClick={() => void onSpDeposit()}
+                disabled={busy !== null || !(spAmount > 0) || spBlocked}
+                className="rounded-xl bg-amber-400 px-5 py-2 font-semibold text-black disabled:opacity-50"
+              >
+                Place bid
+              </button>
+            </div>
+            {myBid && myFree < myBid.usdc ? (
+              <p className="mt-3 text-xs text-slate-500">
+                A bid cannot leave if the remaining book would fall below{" "}
+                {formatUsd(borrowedUi, 0)} borrowed. Your idle slice is {formatUsd(myFree)}.
+              </p>
+            ) : null}
           </div>
-          <button
-            onClick={() => void onSpClaim()}
-            disabled={busy !== null || mySpClaimable <= 0}
-            className="w-full rounded-xl border border-sky-400/40 px-5 py-2 font-semibold text-sky-100 disabled:opacity-40"
-          >
-            Claim {mySpClaimable > 0 ? `${mySpClaimable.toFixed(4)} ANTHROPIC` : "ANTHROPIC"}
-          </button>
+        </div>
+
+        <div className="space-y-6">
+          <div className="panel overflow-hidden rounded-3xl p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-xl">Live bids</h2>
+              <span className="mono text-xs text-slate-400">{liveBids.length} in book</span>
+            </div>
+            {liveBids.length === 0 ? (
+              <p className="rounded-2xl bg-black/30 px-4 py-8 text-center text-sm text-slate-500">
+                No bids yet. Yours will be first.
+              </p>
+            ) : (
+              <div className="overflow-hidden rounded-2xl border border-white/10">
+                <div className="grid grid-cols-[2rem_1fr_1fr_4.5rem] gap-2 border-b border-white/10 px-3 py-2 text-[11px] uppercase tracking-widest text-slate-500">
+                  <div>#</div>
+                  <div>USDC</div>
+                  <div className="text-center">Wallet</div>
+                  <div className="text-right">Discount</div>
+                </div>
+                {liveBids.map((row, i) => {
+                  const mine = row.owner === myWallet;
+                  const covering = row.engaged > 0;
+                  return (
+                    <div
+                      key={`${row.owner}-${i}`}
+                      className={`cursor-default border-t border-white/5 px-3 py-2.5 transition-colors hover:bg-white/[0.06] ${
+                        mine ? "bg-amber-400/10 hover:bg-amber-400/15" : ""
+                      }`}
+                    >
+                      <div className="grid grid-cols-[2rem_1fr_1fr_4.5rem] items-center gap-2 text-sm">
+                        <div className="mono text-slate-500">{i + 1}</div>
+                        <div>
+                          <div className="mono">{formatUsd(row.usdc)}</div>
+                          {mine ? (
+                            <div className="text-[11px] text-slate-400">
+                              {covering
+                                ? `${formatUsd(row.free)} idle / ${formatUsd(row.engaged)} covering`
+                                : `${formatUsd(row.free)} idle`}
+                            </div>
+                          ) : (
+                            <div className={`text-[11px] ${covering ? "text-amber-200/80" : "text-slate-500"}`}>
+                              {covering ? "Covering" : "Idle"}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-center font-mono text-[11px] text-slate-500">
+                          {row.owner.slice(0, 4)}…{row.owner.slice(-4)}
+                          {mine ? (
+                            <div className="mt-0.5 text-[10px] font-semibold text-amber-300">You</div>
+                          ) : null}
+                        </div>
+                        <div className="text-right text-base font-semibold">
+                          −{(row.discountBps / 100).toFixed(0)}%
+                        </div>
+                      </div>
+                      {mine ? (
+                        <div className="mt-2 flex flex-wrap justify-end gap-2">
+                          {mySpClaimable > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void onSpClaim()}
+                              disabled={busy !== null}
+                              className="rounded-lg bg-sky-400 px-3 py-1 text-xs font-semibold text-black disabled:opacity-50"
+                            >
+                              Claim {mySpClaimable.toFixed(4)} ANTH
+                            </button>
+                          ) : null}
+                          {row.free > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => void onSpWithdraw(row.free)}
+                              disabled={busy !== null}
+                              className="rounded-lg border border-white/20 px-3 py-1 text-xs disabled:opacity-50"
+                            >
+                              {covering ? "Withdraw idle" : "Remove"}
+                            </button>
+                          ) : covering ? (
+                            <span className="text-[11px] text-slate-500">Locked by debt</span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {spCollateral > 0 ? (
+              <p className="mt-4 text-xs text-slate-500">
+                Book holds {spCollateral.toFixed(4)} ANTH from fills — claim from your card.
+              </p>
+            ) : null}
+          </div>
         </div>
       </section>
       )}
@@ -1413,13 +1475,24 @@ export function Dashboard() {
         <div className="grid gap-3 md:grid-cols-3">
           <div className="rounded-2xl border border-white/10 bg-black/30 p-3">
             <div className="mono text-[11px] text-slate-500">Price used</div>
-            <div className={`text-lg ${testModePrice > 0 ? "text-red-300" : ""}`}>
-              {usedPrice > 0 ? formatUsd(usedPrice) : "—"}
+            <div className="text-lg">
+              {selected ? (
+                <PriceQuote
+                  mark={selected.markPrice}
+                  token={selected.tokenPrice}
+                  display={testModePrice > 0 ? testModePrice : usedPrice}
+                  test={testModePrice > 0}
+                  name={tokenLabel(selected.name)}
+                  className={testModePrice > 0 ? "text-red-300" : "text-sky-300"}
+                />
+              ) : usedPrice > 0 ? (
+                formatUsd(usedPrice)
+              ) : (
+                "—"
+              )}
             </div>
             <div className="text-[11px] text-slate-500">
-              {testModePrice > 0 && activeDrop
-                ? `test −${activeDrop}%`
-                : "min(mark, DEX)"}
+              {testModePrice > 0 && activeDrop ? `test −${activeDrop}%` : "min(mark, token)"}
             </div>
           </div>
           <div className="rounded-2xl border border-white/10 bg-black/30 p-3">
@@ -1458,11 +1531,20 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: ReactNode;
+  hint?: string;
+}) {
   return (
     <div className="panel rounded-2xl px-4 py-3">
       <div className="mono text-[11px] uppercase tracking-widest text-slate-500">{label}</div>
       <div className="mt-1 text-lg text-amber-200">{value}</div>
+      {hint ? <div className="mt-0.5 text-[11px] text-slate-500">{hint}</div> : null}
     </div>
   );
 }

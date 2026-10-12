@@ -17,14 +17,38 @@ const FALLBACK: PreStock[] = [
   },
 ];
 
+function num(value: unknown, fallback = 0) {
+  if (value == null || value === "") return fallback;
+  const n = Number(value);
+  return Number.isFinite(n) && n !== 0 ? n : fallback;
+}
+
+function normalize(row: Partial<PreStock>): PreStock {
+  const markPrice = num(row.markPrice);
+  return {
+    name: row.name ?? row.symbol ?? "PreStock",
+    symbol: row.symbol ?? "UNKNOWN",
+    description: row.description ?? "",
+    image: row.image ?? "",
+    external_url: row.external_url ?? "",
+    contract_address: row.contract_address ?? "",
+    markPrice,
+    // PreStocks currently ships tokenPrice/impliedValuation as null.
+    tokenPrice: num(row.tokenPrice, markPrice),
+    impliedValuation: num(row.impliedValuation),
+    markValuation: num(row.markValuation),
+    supply: num(row.supply),
+  };
+}
+
 export async function GET() {
   try {
     const res = await fetch("https://prestocks.com/api/prestocks", {
       next: { revalidate: 30 },
     });
     if (!res.ok) throw new Error(String(res.status));
-    const data = (await res.json()) as PreStock[];
-    return NextResponse.json(data);
+    const data = (await res.json()) as Partial<PreStock>[];
+    return NextResponse.json(data.map(normalize));
   } catch {
     return NextResponse.json(FALLBACK);
   }

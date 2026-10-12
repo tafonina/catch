@@ -19,17 +19,23 @@ export function prelendProgramId() {
   return new PublicKey(PRELEND_PROGRAM_ID);
 }
 
-export function globalConfigPda(programId = prelendProgramId()) {
-  return PublicKey.findProgramAddressSync([Buffer.from(CONFIG_SEED)], programId)[0];
-}
-
-export function usdcVaultPda(programId = prelendProgramId()) {
-  return PublicKey.findProgramAddressSync([Buffer.from(USDC_VAULT_SEED)], programId)[0];
-}
-
-export function lenderPda(owner: PublicKey, programId = prelendProgramId()) {
+export function globalConfigPda(mint: PublicKey, programId = prelendProgramId()) {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from(LENDER_SEED), owner.toBuffer()],
+    [Buffer.from(CONFIG_SEED), mint.toBuffer()],
+    programId,
+  )[0];
+}
+
+export function usdcVaultPda(mint: PublicKey, programId = prelendProgramId()) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(USDC_VAULT_SEED), mint.toBuffer()],
+    programId,
+  )[0];
+}
+
+export function lenderPda(owner: PublicKey, mint: PublicKey, programId = prelendProgramId()) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(LENDER_SEED), owner.toBuffer(), mint.toBuffer()],
     programId,
   )[0];
 }
@@ -111,14 +117,36 @@ export function decodeConfig(data: Uint8Array) {
     totalBorrowed: Number(u64(d, 114)),
     maxBorrowLtvBps: d.getUint16(122, true),
     liquidationLtvBps: d.getUint16(124, true),
-    interestRateBps: d.getUint16(128, true),
-    adminDebtCap: Number(u64(d, 130)),
-    borrowIndexE18: u128(data, 147),
-    lastAccrualTs: Number(i64(d, 163)),
-    postedDepth: Number(u64(d, 171)),
-    testModePriceE6: Number(u64(d, 179)),
-    paused: data[187] !== 0,
+    targetLtvBps: d.getUint16(126, true),
+    baseRateBps: d.getUint16(128, true),
+    kinkUtilBps: d.getUint16(130, true),
+    kinkRateBps: d.getUint16(132, true),
+    maxRateBps: d.getUint16(134, true),
+    interestRateBps: d.getUint16(132, true),
+    borrowIndexE18: u128(data, 173),
+    lastAccrualTs: Number(i64(d, 189)),
+    postedDepth: Number(u64(d, 197)),
+    testModePriceE6: Number(u64(d, 205)),
+    paused: data[213] !== 0,
+    seniorAssets: Number(u64(d, 216)),
+    reserveUsdc: Number(u64(d, 224)),
+    collateralMint: data.length >= 264 ? pubkey(data, 232).toBase58() : "",
   };
+}
+
+export function legacyGlobalConfigPda(programId = prelendProgramId()) {
+  return PublicKey.findProgramAddressSync([Buffer.from(CONFIG_SEED)], programId)[0];
+}
+
+export function legacyUsdcVaultPda(programId = prelendProgramId()) {
+  return PublicKey.findProgramAddressSync([Buffer.from(USDC_VAULT_SEED)], programId)[0];
+}
+
+export function legacyLenderPda(owner: PublicKey, programId = prelendProgramId()) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(LENDER_SEED), owner.toBuffer()],
+    programId,
+  )[0];
 }
 
 function u128(data: Uint8Array, o: number) {
@@ -142,120 +170,82 @@ export function decodeOracle(data: Uint8Array) {
   };
 }
 
-const E18 = 1_000_000_000_000_000_000n;
 export const SP_POOL_V1_LEN = 146;
-export const SP_DEPOSIT_V1_LEN = 129;
-
-function mulDiv(a: bigint, b: bigint, c: bigint) {
-  if (c === 0n) return 0n;
-  return (a * b) / c;
-}
+export const SP_DEPOSIT_V1_LEN = 107;
+const MAX_BIDS = 8;
 
 export function decodeStabilityPool(data: Uint8Array) {
   const d = view(data);
-  if (data.length >= SP_POOL_V1_LEN && data[8] === 1) {
+  const version = data[8] ?? 0;
+  if (version !== 2) {
     return {
-      version: 1,
-      totalUsdc: Number(u64(d, 9)),
-      collateralMint: pubkey(data, 17).toBase58(),
-      collateralHeld: Number(u64(d, 49)),
-      pE18: u128(data, 57),
-      sE18: u128(data, 73),
-      epoch: Number(u64(d, 89)),
-      prevSE18: u128(data, 97),
-      prevEpoch: Number(u64(d, 113)),
-      legacyUsdc: Number(u64(d, 121)),
-      legacyColl: Number(u64(d, 129)),
-      legacyShares: Number(u64(d, 137)),
-      needsMigrate: false,
+      version,
+      totalUsdc: 0,
+      collateralMint: pubkey(data, Math.min(17, data.length - 32)).toBase58(),
+      collateralHeld: 0,
+      bidCount: 0,
+      owners: [] as string[],
+      bidUsdc: [] as number[],
+      discountBps: [] as number[],
+      needsMigrate: true,
+      legacyUsdc: 0,
+      legacyColl: 0,
+      legacyShares: 0,
     };
   }
+  const bidCount = data[57] ?? 0;
+  const owners: string[] = [];
+  const bidUsdc: number[] = [];
+  const discountBps: number[] = [];
+  for (let i = 0; i < Math.min(bidCount, MAX_BIDS); i += 1) {
+    owners.push(pubkey(data, 58 + i * 32).toBase58());
+    bidUsdc.push(Number(u64(d, 314 + i * 8)));
+    discountBps.push(d.getUint16(378 + i * 2, true));
+  }
   return {
-    version: 0,
-    totalUsdc: Number(u64(d, 8)),
-    collateralMint: pubkey(data, 24).toBase58(),
-    collateralHeld: Number(u64(d, 56)),
-    pE18: E18,
-    sE18: 0n,
-    epoch: 0,
-    prevSE18: 0n,
-    prevEpoch: 0,
-    legacyUsdc: Number(u64(d, 8)),
-    legacyColl: Number(u64(d, 56)),
-    legacyShares: Number(u64(d, 16)),
-    needsMigrate: true,
+    version,
+    totalUsdc: Number(u64(d, 9)),
+    collateralMint: pubkey(data, 17).toBase58(),
+    collateralHeld: Number(u64(d, 49)),
+    bidCount,
+    owners,
+    bidUsdc,
+    discountBps,
+    needsMigrate: false,
+    legacyUsdc: 0,
+    legacyColl: 0,
+    legacyShares: 0,
   };
 }
 
 export function decodeStabilityDeposit(data: Uint8Array) {
-  if (data.length < 80) {
-    return {
-      legacy: true,
-      initialUsdc: 0,
-      snapshotPE18: E18,
-      snapshotSE18: 0n,
-      snapshotEpoch: 0,
-      pendingCollateral: 0,
-      shares: 0,
-    };
-  }
   const d = view(data);
-  if (data.length >= SP_DEPOSIT_V1_LEN) {
-    return {
-      legacy: false,
-      initialUsdc: Number(u64(d, 72)),
-      snapshotPE18: u128(data, 80),
-      snapshotSE18: u128(data, 96),
-      snapshotEpoch: Number(u64(d, 112)),
-      pendingCollateral: Number(u64(d, 120)),
-    };
-  }
   return {
-    legacy: true,
-    initialUsdc: 0,
-    snapshotPE18: E18,
-    snapshotSE18: 0n,
-    snapshotEpoch: 0,
-    pendingCollateral: 0,
-    shares: Number(u64(d, 72)),
+    legacy: false,
+    depositor: pubkey(data, 8).toBase58(),
+    discountBps: d.getUint16(72, true),
+    initialUsdc: Number(u64(d, 74)),
+    pendingCollateral: Number(u64(d, 82)),
+    yieldUsdc: Number(u64(d, 90)),
   };
 }
 
 export function liveSpPosition(
   pool: ReturnType<typeof decodeStabilityPool>,
   deposit: ReturnType<typeof decodeStabilityDeposit> | null,
+  owner?: string,
 ) {
-  if (!deposit) {
-    return {
-      usdcUi: 0,
-      claimableUi: 0,
-      needsMigrate: pool.needsMigrate,
-      blocked: pool.needsMigrate || pool.legacyShares > 0,
-    };
+  if (pool.needsMigrate) {
+    return { usdcUi: 0, claimableUi: 0, needsMigrate: true, blocked: true, discountBps: 0 };
   }
-  if (deposit.legacy) {
-    return {
-      usdcUi: 0,
-      claimableUi: 0,
-      needsMigrate: true,
-      blocked: true,
-    };
-  }
-  const initial = BigInt(deposit.initialUsdc);
-  const snapP = deposit.snapshotPE18 === 0n ? E18 : deposit.snapshotPE18;
-  const compounded =
-    deposit.snapshotEpoch === pool.epoch ? mulDiv(initial, pool.pE18, snapP) : 0n;
-  let s = 0n;
-  if (deposit.snapshotEpoch === pool.epoch) s = pool.sE18;
-  else if (deposit.snapshotEpoch === pool.prevEpoch) s = pool.prevSE18;
-  const extra =
-    s > deposit.snapshotSE18 ? mulDiv(initial, s - deposit.snapshotSE18, snapP) : 0n;
-  const gain = BigInt(deposit.pendingCollateral) + extra;
+  const idx = owner ? pool.owners.indexOf(owner) : -1;
+  const usdc = idx >= 0 ? pool.bidUsdc[idx] : deposit?.initialUsdc ?? 0;
   return {
-    usdcUi: Number(compounded) / 1e6,
-    claimableUi: Number(gain) / 1e9,
-    needsMigrate: pool.needsMigrate,
-    blocked: pool.legacyShares > 0,
+    usdcUi: usdc / 1e6,
+    claimableUi: (deposit?.pendingCollateral ?? 0) / 1e9,
+    needsMigrate: false,
+    blocked: false,
+    discountBps: idx >= 0 ? pool.discountBps[idx] : deposit?.discountBps ?? 0,
   };
 }
 
@@ -272,23 +262,54 @@ export function decodePosition(data: Uint8Array) {
   };
 }
 
+const E18 = 1_000_000_000_000_000_000n;
+const POSITION_LEN = 114;
+
+function debtAtoms(scaled: number, indexE18: bigint) {
+  return (BigInt(Math.round(scaled)) * indexE18) / E18;
+}
+
+/** Config.total_borrowed can be 0 after a pool reset while position PDAs remain. */
+async function openDebtUi(
+  connection: Connection,
+  programId: PublicKey,
+  indexE18: bigint,
+  mint?: string,
+) {
+  const accs = await connection.getProgramAccounts(programId, {
+    filters: [{ dataSize: POSITION_LEN }],
+  });
+  let atoms = 0n;
+  for (const { account } of accs) {
+    const data = new Uint8Array(account.data);
+    const pos = decodePosition(data);
+    if (pos.status !== 0 || pos.scaledDebt <= 0) continue;
+    if (mint && pos.collateralMint !== mint) continue;
+    atoms += debtAtoms(pos.scaledDebt, indexE18);
+  }
+  return Number(atoms) / 1e6;
+}
+
 export async function resolveCollateralMint(connection: Connection, programId = prelendProgramId()) {
   const mock = new PublicKey(MOCK_ANTHROPIC);
   const main = new PublicKey(ANTHROPIC_MAINNET);
   const infos = await connection.getMultipleAccountsInfo([
+    globalConfigPda(mock, programId),
+    globalConfigPda(main, programId),
     stabilityPoolPda(mock, programId),
     stabilityPoolPda(main, programId),
   ]);
-  if (infos[0]) return mock;
-  if (infos[1]) return main;
+  if (infos[0] || infos[2]) return mock;
+  if (infos[1] || infos[3]) return main;
   return mock;
 }
 
 export async function readUsdcVault(connection = new Connection(rpcUrl(), "confirmed")) {
   const programId = prelendProgramId();
   const programInfo = await connection.getAccountInfo(programId);
-  const vault = usdcVaultPda(programId);
-  const config = globalConfigPda(programId);
+  const market = await resolveCollateralMint(connection, programId);
+  const vault = usdcVaultPda(market, programId);
+  const config = globalConfigPda(market, programId);
   if (!programInfo?.executable) {
     return {
       deployed: false as const,
@@ -301,10 +322,17 @@ export async function readUsdcVault(connection = new Connection(rpcUrl(), "confi
     const account = await getAccount(connection, vault, "confirmed");
     const configInfo = await connection.getAccountInfo(config);
     const parsed = configInfo ? decodeConfig(configInfo.data) : null;
+    const spInfo = await connection.getAccountInfo(stabilityPoolPda(market, programId));
+    const stability = spInfo ? decodeStabilityPool(new Uint8Array(spInfo.data)) : null;
     const vaultUi = Number(account.amount) / 1e6;
-    const borrowedUi = (parsed?.totalBorrowed ?? 0) / 1e6;
+    const fromConfig = (parsed?.totalBorrowed ?? 0) / 1e6;
+    const fromBooks = parsed
+      ? await openDebtUi(connection, programId, parsed.borrowIndexE18, parsed.collateralMint || undefined)
+      : 0;
+    const borrowedUi = Math.max(fromConfig, fromBooks);
     const shares = parsed?.totalShares ?? 0;
-    const poolValueUi = vaultUi + borrowedUi;
+    const seniorUi = (parsed?.seniorAssets ?? 0) / 1e6;
+    const poolValueUi = seniorUi > 0 ? seniorUi : vaultUi + fromConfig;
     const sharePrice = shares > 0 ? (poolValueUi * 1e6) / shares : 1;
     return {
       deployed: true as const,
@@ -322,9 +350,10 @@ export async function readUsdcVault(connection = new Connection(rpcUrl(), "confi
       admin: parsed?.admin ?? null,
       feeRecipient: parsed?.feeRecipient ?? null,
       interestRateBps: parsed?.interestRateBps ?? 1200,
-      adminDebtCapUi: (parsed?.adminDebtCap ?? 0) / 1e6,
+      adminDebtCapUi: 0,
       postedDepthUi: (parsed?.postedDepth ?? 0) / 1e6,
       testModePriceE6: parsed?.testModePriceE6 ?? 0,
+      stability,
     };
   } catch {
     return {
@@ -346,10 +375,11 @@ export async function readUserMarket(
   connection = new Connection(rpcUrl(), "confirmed"),
 ) {
   const programId = prelendProgramId();
-  const vaultPda = usdcVaultPda(programId);
-  const configPda = globalConfigPda(programId);
   const mock = new PublicKey(MOCK_ANTHROPIC);
   const main = new PublicKey(ANTHROPIC_MAINNET);
+  const market = await resolveCollateralMint(connection, programId);
+  const vaultPda = usdcVaultPda(market, programId);
+  const configPda = globalConfigPda(market, programId);
   const first = await connection.getMultipleAccountsInfo([
     programId,
     vaultPda,
@@ -369,17 +399,33 @@ export async function readUserMarket(
   const vaultData = new Uint8Array(first[1].data);
   const parsed = decodeConfig(new Uint8Array(first[2].data));
   const vaultUi = tokenAmount(vaultData, 6);
-  const borrowedUi = parsed.totalBorrowed / 1e6;
+  const fromConfig = parsed.totalBorrowed / 1e6;
+  const fromBooks = await openDebtUi(
+    connection,
+    programId,
+    parsed.borrowIndexE18,
+    parsed.collateralMint || undefined,
+  );
+  const borrowedUi = Math.max(fromConfig, fromBooks);
   const sharesTotal = parsed.totalShares;
-  const poolValueUi = vaultUi + borrowedUi;
+  const seniorUi = (parsed.seniorAssets ?? 0) / 1e6;
+  const poolValueUi = seniorUi > 0 ? seniorUi : vaultUi + fromConfig;
   const usdcMint = pubkey(vaultData, 0);
-  const collateralMint = first[3] ? mock : first[4] ? main : mock;
+  const mintFromConfig = parsed.collateralMint;
+  const collateralMint =
+    mintFromConfig && mintFromConfig !== PublicKey.default.toBase58()
+      ? new PublicKey(mintFromConfig)
+      : first[3]
+        ? mock
+        : first[4]
+          ? main
+          : mock;
   const pool = stabilityPoolPda(collateralMint, programId);
   const collAta = getAssociatedTokenAddressSync(collateralMint, owner, false, TOKEN_PROGRAM_ID);
   const usdcAta = getAssociatedTokenAddressSync(usdcMint, owner, false, first[1].owner);
   const second = await connection.getMultipleAccountsInfo([
     oraclePda(collateralMint, programId),
-    lenderPda(owner, programId),
+    lenderPda(owner, collateralMint, programId),
     positionPda(owner, collateralMint, programId),
     pool,
     stabilityDepositPda(owner, pool, programId),
@@ -390,10 +436,7 @@ export async function readUserMarket(
   const shares = lenderInfo ? decodeLender(new Uint8Array(lenderInfo.data)).shares : 0;
   const shareValueUi = sharesTotal > 0 ? (shares / sharesTotal) * poolValueUi : 0;
   const pos = second[2] ? decodePosition(new Uint8Array(second[2].data)) : null;
-  const e18 = 1_000_000_000_000_000_000n;
-  const debtUi = pos
-    ? Number((BigInt(Math.round(pos.scaledDebt)) * parsed.borrowIndexE18) / e18) / 1e6
-    : 0;
+  const debtUi = pos ? Number(debtAtoms(pos.scaledDebt, parsed.borrowIndexE18)) / 1e6 : 0;
   return {
     ...vaultBase,
     initialized: true as const,
@@ -407,7 +450,7 @@ export async function readUserMarket(
     admin: parsed.admin,
     feeRecipient: parsed.feeRecipient,
     interestRateBps: parsed.interestRateBps,
-    adminDebtCapUi: parsed.adminDebtCap / 1e6,
+    adminDebtCapUi: 0,
     postedDepthUi: parsed.postedDepth / 1e6,
     testModePriceE6: parsed.testModePriceE6,
     lastAccrualTs: parsed.lastAccrualTs,
@@ -431,9 +474,10 @@ export async function readUserMarket(
         ? liveSpPosition(
             decodeStabilityPool(new Uint8Array(second[3].data)),
             decodeStabilityDeposit(new Uint8Array(second[4].data)),
+            owner.toBase58(),
           )
         : second[3]
-          ? liveSpPosition(decodeStabilityPool(new Uint8Array(second[3].data)), null)
+          ? liveSpPosition(decodeStabilityPool(new Uint8Array(second[3].data)), null, owner.toBase58())
           : { usdcUi: 0, claimableUi: 0, needsMigrate: false, blocked: false },
   };
 }

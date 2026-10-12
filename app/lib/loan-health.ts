@@ -46,7 +46,7 @@ export async function readLoanCard(
   const pos = decodePosition(posInfo.data);
   const mint = new PublicKey(pos.collateralMint);
   const [configInfo, oracleInfo, mintInfo] = await Promise.all([
-    connection.getAccountInfo(globalConfigPda()),
+    connection.getAccountInfo(globalConfigPda(mint)),
     connection.getAccountInfo(oraclePda(mint)),
     connection.getAccountInfo(mint),
   ]);

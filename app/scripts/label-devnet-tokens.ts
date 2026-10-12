@@ -18,7 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { rpcUrl } from "../lib/cluster";
-import { MOCK_ANTHROPIC, prelendProgramId, usdcVaultPda } from "../lib/prelend";
+import { MOCK_ANTHROPIC, resolveCollateralMint, usdcVaultPda } from "../lib/prelend";
 import { getAccount } from "@solana/spl-token";
 
 const META = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
@@ -123,7 +123,8 @@ async function label(
 async function main() {
   const connection = new Connection(rpcUrl(), "confirmed");
   const admin = loadKeypair();
-  const vault = await getAccount(connection, usdcVaultPda(prelendProgramId()));
+  const market = await resolveCollateralMint(connection);
+  const vault = await getAccount(connection, usdcVaultPda(market));
   const usdc = vault.mint;
   console.log("signer", admin.publicKey.toBase58());
   await label(connection, admin, usdc, "USD Coin", "USDC", USDC_URI);
