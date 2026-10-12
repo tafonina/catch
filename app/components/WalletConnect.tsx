@@ -41,7 +41,7 @@ function fmt(n: number, digits = 0) {
   return n.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
-const FAUCET_FETCH_MS = 45_000;
+const FAUCET_FETCH_MS = 55_000;
 
 async function faucet(wallet: string, token: "usdc" | "anthropic" | "sol", amount?: number) {
   const ctrl = new AbortController();
