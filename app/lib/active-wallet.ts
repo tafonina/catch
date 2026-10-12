@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import { demoPublicKey, isDemoWalletActive, setActiveDemoRole } from "@/lib/demo-wallets";
 
 type PhantomInjected = {
   isConnected?: boolean;
@@ -11,14 +12,17 @@ type PhantomInjected = {
 
 const INTENT_KEY = "prelend.wallet.intent";
 
-export function walletIntent(): "connected" | "disconnected" | null {
+export function walletIntent(): "connected" | "disconnected" | "demo" | null {
   if (typeof window === "undefined") return null;
   const value = sessionStorage.getItem(INTENT_KEY);
-  return value === "connected" || value === "disconnected" ? value : null;
+  return value === "connected" || value === "disconnected" || value === "demo"
+    ? value
+    : null;
 }
 
-export function setWalletIntent(intent: "connected" | "disconnected") {
+export function setWalletIntent(intent: "connected" | "disconnected" | "demo") {
   if (typeof window === "undefined") return;
+  if (intent !== "demo") setActiveDemoRole(null);
   sessionStorage.setItem(INTENT_KEY, intent);
 }
 
@@ -37,7 +41,7 @@ export function phantomInjected(): PhantomInjected | undefined {
 }
 
 export function phantomPublicKey(): PublicKey | null {
-  if (walletIntent() === "disconnected") return null;
+  if (walletIntent() === "disconnected" || walletIntent() === "demo") return null;
   const key = phantomInjected()?.publicKey;
   if (!key) return null;
   try {
@@ -49,12 +53,13 @@ export function phantomPublicKey(): PublicKey | null {
 }
 
 export function signerKey(adapterKey: PublicKey | null): PublicKey | null {
+  if (isDemoWalletActive()) return demoPublicKey();
   return phantomPublicKey() ?? adapterKey;
 }
 
 /** Reconnect Phantom with no popup if this site is already approved. */
 export async function reconnectTrustedPhantom() {
-  if (walletIntent() === "disconnected") return null;
+  if (walletIntent() === "disconnected" || walletIntent() === "demo") return demoPublicKey();
   const phantom = phantomInjected();
   if (!phantom) return null;
   if (!phantom.isConnected) {

@@ -1,6 +1,6 @@
 export const PRELEND_PROGRAM_ID =
   process.env.NEXT_PUBLIC_PRELEND_PROGRAM_ID ??
-  "HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd";
+  "5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY";
 
 export const USDC_MINT_MAINNET = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 export const USDC_MINT_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";

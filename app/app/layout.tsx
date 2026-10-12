@@ -5,7 +5,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Catch — Borrow USDC against PreStocks",
   description:
-    "Over-collateralized lending for tokenized pre-IPO stocks on Solana. A Stability Pool catches liquidations.",
+    "Over-collateralized lending for tokenized pre-IPO stocks on Solana. Credit is capped by locked bids.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

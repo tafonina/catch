@@ -6,7 +6,12 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PRELEND_PROGRAM_ID } from "@/lib/cluster";
-import { globalConfigPda, usdcVaultPda } from "@/lib/prelend";
+import {
+  globalConfigPda,
+  legacyGlobalConfigPda,
+  legacyUsdcVaultPda,
+  usdcVaultPda,
+} from "@/lib/prelend";
 
 export function anchorDisc(name: string) {
   return createHash("sha256").update(`global:${name}`).digest().subarray(0, 8);
@@ -39,8 +44,15 @@ function optionU64(value: bigint | null) {
   return Buffer.concat([u8(1), u64le(value)]);
 }
 
-export function lenderPda(lender: PublicKey, programId = new PublicKey(PRELEND_PROGRAM_ID)) {
-  return PublicKey.findProgramAddressSync([Buffer.from("lender"), lender.toBuffer()], programId)[0];
+export function lenderPda(
+  lender: PublicKey,
+  collateralMint: PublicKey,
+  programId = new PublicKey(PRELEND_PROGRAM_ID),
+) {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("lender"), lender.toBuffer(), collateralMint.toBuffer()],
+    programId,
+  )[0];
 }
 
 export function oraclePda(mint: PublicKey, programId = new PublicKey(PRELEND_PROGRAM_ID)) {
@@ -64,14 +76,22 @@ export function spUsdcVaultPda(mint: PublicKey, programId = new PublicKey(PRELEN
 export function initializePoolIx(params: {
   admin: PublicKey;
   usdcMint: PublicKey;
+  collateralMint: PublicKey;
   feeRecipient: PublicKey;
   protocolFeeBps?: number;
   maxBorrowLtvBps?: number;
   liquidationLtvBps?: number;
-  liquidationBonusBps?: number;
-  interestRateBps?: number;
-  adminDebtCap?: bigint;
+  targetLtvBps?: number;
+  baseRateBps?: number;
+  kinkUtilBps?: number;
+  kinkRateBps?: number;
+  maxRateBps?: number;
+  reserveFactorBps?: number;
+  seniorFloorBps?: number;
+  interestHeadroomSecs?: number;
   priceStalenessSecs?: number;
+  keeperFeeUsdc?: bigint;
+  dustUsdc?: bigint;
   marketClass?: number;
 }) {
   const programId = new PublicKey(PRELEND_PROGRAM_ID);
@@ -80,10 +100,17 @@ export function initializePoolIx(params: {
     u16le(params.protocolFeeBps ?? 50),
     u16le(params.maxBorrowLtvBps ?? 3_000),
     u16le(params.liquidationLtvBps ?? 4_000),
-    u16le(params.liquidationBonusBps ?? 1_000),
-    u16le(params.interestRateBps ?? 1_200),
-    u64le(params.adminDebtCap ?? BigInt(25_000) * BigInt(1_000_000)),
+    u16le(params.targetLtvBps ?? 3_000),
+    u16le(params.baseRateBps ?? 1_000),
+    u16le(params.kinkUtilBps ?? 8_000),
+    u16le(params.kinkRateBps ?? 1_500),
+    u16le(params.maxRateBps ?? 3_000),
+    u16le(params.reserveFactorBps ?? 1_000),
+    u16le(params.seniorFloorBps ?? 500),
+    i64le(BigInt(params.interestHeadroomSecs ?? 7 * 86_400)),
     i64le(BigInt(params.priceStalenessSecs ?? 300)),
+    u64le(params.keeperFeeUsdc ?? 0n),
+    u64le(params.dustUsdc ?? 1_000_000n),
     u8(params.marketClass ?? 0),
   ]);
   return new TransactionInstruction({
@@ -91,9 +118,10 @@ export function initializePoolIx(params: {
     keys: [
       { pubkey: params.admin, isSigner: true, isWritable: true },
       { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
       { pubkey: params.feeRecipient, isSigner: false, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: true },
-      { pubkey: usdcVaultPda(programId), isSigner: false, isWritable: true },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: usdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
@@ -104,6 +132,7 @@ export function initializePoolIx(params: {
 export function resetPoolIx(params: {
   admin: PublicKey;
   usdcMint: PublicKey;
+  collateralMint: PublicKey;
   adminUsdc: PublicKey;
   leftover?: PublicKey[];
 }) {
@@ -117,8 +146,9 @@ export function resetPoolIx(params: {
     programId,
     keys: [
       { pubkey: params.admin, isSigner: true, isWritable: true },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: true },
-      { pubkey: usdcVaultPda(programId), isSigner: false, isWritable: true },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: usdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: params.usdcMint, isSigner: false, isWritable: false },
       { pubkey: params.adminUsdc, isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
@@ -131,6 +161,7 @@ export function resetPoolIx(params: {
 export function depositLiquidityIx(params: {
   lender: PublicKey;
   usdcMint: PublicKey;
+  collateralMint: PublicKey;
   lenderUsdc: PublicKey;
   amount: bigint;
 }) {
@@ -140,10 +171,11 @@ export function depositLiquidityIx(params: {
     keys: [
       { pubkey: params.lender, isSigner: true, isWritable: true },
       { pubkey: params.usdcMint, isSigner: false, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: true },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: params.lenderUsdc, isSigner: false, isWritable: true },
-      { pubkey: usdcVaultPda(programId), isSigner: false, isWritable: true },
-      { pubkey: lenderPda(params.lender, programId), isSigner: false, isWritable: true },
+      { pubkey: usdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: lenderPda(params.lender, params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
@@ -163,7 +195,7 @@ export function updateOracleIx(params: {
     keys: [
       { pubkey: params.admin, isSigner: true, isWritable: false },
       { pubkey: params.mint, isSigner: false, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.mint, programId), isSigner: false, isWritable: false },
       { pubkey: oraclePda(params.mint, programId), isSigner: false, isWritable: true },
       { pubkey: params.admin, isSigner: true, isWritable: true },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
@@ -176,15 +208,47 @@ export function updateOracleIx(params: {
   });
 }
 
-export function updateDepthIx(params: { admin: PublicKey; postedDepth: bigint }) {
+export function updateDepthIx(params: {
+  admin: PublicKey;
+  collateralMint: PublicKey;
+  postedDepth: bigint;
+}) {
   const programId = new PublicKey(PRELEND_PROGRAM_ID);
   return new TransactionInstruction({
     programId,
     keys: [
       { pubkey: params.admin, isSigner: true, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: true },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: true },
     ],
     data: Buffer.concat([anchorDisc("update_depth"), u64le(params.postedDepth)]),
+  });
+}
+
+export function closeLegacyGlobalIx(params: {
+  admin: PublicKey;
+  usdcMint: PublicKey;
+  adminUsdc: PublicKey;
+  leftover?: PublicKey[];
+}) {
+  const programId = new PublicKey(PRELEND_PROGRAM_ID);
+  const leftover = (params.leftover ?? []).map((pubkey) => ({
+    pubkey,
+    isSigner: false,
+    isWritable: true,
+  }));
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: legacyGlobalConfigPda(programId), isSigner: false, isWritable: true },
+      { pubkey: legacyUsdcVaultPda(programId), isSigner: false, isWritable: true },
+      { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+      { pubkey: params.adminUsdc, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ...leftover,
+    ],
+    data: anchorDisc("close_legacy_global"),
   });
 }
 
@@ -200,12 +264,45 @@ export function initStabilityPoolIx(params: {
       { pubkey: params.admin, isSigner: true, isWritable: true },
       { pubkey: params.collateralMint, isSigner: false, isWritable: false },
       { pubkey: params.usdcMint, isSigner: false, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: false },
       { pubkey: stabilityPoolPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: spUsdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data: anchorDisc("init_stability_pool"),
+  });
+}
+
+export function rebuildSpUsdcVaultIx(params: {
+  admin: PublicKey;
+  collateralMint: PublicKey;
+  usdcMint: PublicKey;
+  oldUsdcMint: PublicKey;
+  adminOldUsdc: PublicKey;
+  leftover?: PublicKey[];
+}) {
+  const programId = new PublicKey(PRELEND_PROGRAM_ID);
+  const leftover = (params.leftover ?? []).map((pubkey) => ({
+    pubkey,
+    isSigner: false,
+    isWritable: true,
+  }));
+  return new TransactionInstruction({
+    programId,
+    keys: [
+      { pubkey: params.admin, isSigner: true, isWritable: true },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+      { pubkey: params.usdcMint, isSigner: false, isWritable: false },
+      { pubkey: params.oldUsdcMint, isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: false },
+      { pubkey: stabilityPoolPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: spUsdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: params.adminOldUsdc, isSigner: false, isWritable: true },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ...leftover,
+    ],
+    data: anchorDisc("rebuild_sp_usdc_vault"),
   });
 }

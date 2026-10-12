@@ -12,7 +12,7 @@ import {
   TransactionInstruction,
 } from "@solana/web3.js";
 import { PRELEND_PROGRAM_ID } from "@/lib/cluster";
-import { globalConfigPda, usdcVaultPda } from "@/lib/prelend";
+import { globalConfigPda, lenderPda, usdcVaultPda } from "@/lib/prelend";
 
 /** sha256("global:deposit_liquidity")[0..8] */
 const DEPOSIT_DISC = new Uint8Array([245, 99, 59, 25, 151, 71, 233, 249]);
@@ -23,13 +23,10 @@ function u64le(n: bigint) {
   return buf;
 }
 
-export function lenderPda(lender: PublicKey, programId = new PublicKey(PRELEND_PROGRAM_ID)) {
-  return PublicKey.findProgramAddressSync([Buffer.from("lender"), lender.toBuffer()], programId)[0];
-}
-
 export function depositLiquidityIx(params: {
   lender: PublicKey;
   usdcMint: PublicKey;
+  collateralMint: PublicKey;
   lenderUsdc: PublicKey;
   tokenProgram: PublicKey;
   amount: bigint;
@@ -40,10 +37,11 @@ export function depositLiquidityIx(params: {
     keys: [
       { pubkey: params.lender, isSigner: true, isWritable: true },
       { pubkey: params.usdcMint, isSigner: false, isWritable: false },
-      { pubkey: globalConfigPda(programId), isSigner: false, isWritable: true },
+      { pubkey: params.collateralMint, isSigner: false, isWritable: false },
+      { pubkey: globalConfigPda(params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: params.lenderUsdc, isSigner: false, isWritable: true },
-      { pubkey: usdcVaultPda(programId), isSigner: false, isWritable: true },
-      { pubkey: lenderPda(params.lender, programId), isSigner: false, isWritable: true },
+      { pubkey: usdcVaultPda(params.collateralMint, programId), isSigner: false, isWritable: true },
+      { pubkey: lenderPda(params.lender, params.collateralMint, programId), isSigner: false, isWritable: true },
       { pubkey: params.tokenProgram, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
@@ -70,6 +68,7 @@ export async function buildDepositTx(params: {
   connection: Connection;
   lender: PublicKey;
   usdcMint: PublicKey;
+  collateralMint: PublicKey;
   uiAmount: number;
 }) {
   const mintInfo = await params.connection.getAccountInfo(params.usdcMint);
@@ -119,6 +118,7 @@ export async function buildDepositTx(params: {
     depositLiquidityIx({
       lender: params.lender,
       usdcMint: params.usdcMint,
+      collateralMint: params.collateralMint,
       lenderUsdc,
       tokenProgram,
       amount,
