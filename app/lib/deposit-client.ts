@@ -15,11 +15,11 @@ import { PRELEND_PROGRAM_ID } from "@/lib/cluster";
 import { globalConfigPda, lenderPda, usdcVaultPda } from "@/lib/prelend";
 
 /** sha256("global:deposit_liquidity")[0..8] */
-const DEPOSIT_DISC = new Uint8Array([245, 99, 59, 25, 151, 71, 233, 249]);
+const DEPOSIT_DISC = Buffer.from([245, 99, 59, 25, 151, 71, 233, 249]);
 
 function u64le(n: bigint) {
-  const buf = new Uint8Array(8);
-  new DataView(buf.buffer).setBigUint64(0, n, true);
+  const buf = Buffer.alloc(8);
+  buf.writeBigUInt64LE(n);
   return buf;
 }
 
@@ -45,7 +45,7 @@ export function depositLiquidityIx(params: {
       { pubkey: params.tokenProgram, isSigner: false, isWritable: false },
       { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
-    data: Uint8Array.from([...DEPOSIT_DISC, ...u64le(params.amount)]),
+    data: Buffer.concat([DEPOSIT_DISC, u64le(params.amount)]),
   });
 }
 

@@ -31,18 +31,18 @@ const PROGRAM = () => new PublicKey(PRELEND_PROGRAM_ID);
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 const DISC = {
-  withdraw: new Uint8Array([149, 158, 33, 185, 47, 243, 253, 31]),
-  borrow: new Uint8Array([31, 120, 217, 32, 182, 137, 251, 34]),
-  repay: new Uint8Array([74, 62, 35, 51, 80, 166, 230, 225]),
-  depositSp: new Uint8Array([218, 14, 14, 168, 24, 224, 243, 241]),
-  withdrawSp: new Uint8Array([174, 6, 7, 145, 238, 95, 102, 21]),
-  claimSp: new Uint8Array([164, 73, 168, 95, 126, 249, 137, 20]),
-  migrateSpPool: new Uint8Array([154, 105, 99, 160, 186, 150, 174, 213]),
-  migrateSpDeposit: new Uint8Array([24, 203, 4, 228, 186, 149, 128, 199]),
-  liquidate: new Uint8Array([223, 179, 226, 125, 48, 46, 39, 74]),
-  claimSurplus: new Uint8Array([95, 73, 158, 127, 131, 104, 189, 65]),
-  setTestPrice: new Uint8Array([132, 240, 240, 176, 155, 122, 8, 176]),
-  warpAccrual: new Uint8Array([187, 92, 101, 47, 51, 125, 83, 151]),
+  withdraw: Buffer.from([149, 158, 33, 185, 47, 243, 253, 31]),
+  borrow: Buffer.from([31, 120, 217, 32, 182, 137, 251, 34]),
+  repay: Buffer.from([74, 62, 35, 51, 80, 166, 230, 225]),
+  depositSp: Buffer.from([218, 14, 14, 168, 24, 224, 243, 241]),
+  withdrawSp: Buffer.from([174, 6, 7, 145, 238, 95, 102, 21]),
+  claimSp: Buffer.from([164, 73, 168, 95, 126, 249, 137, 20]),
+  migrateSpPool: Buffer.from([154, 105, 99, 160, 186, 150, 174, 213]),
+  migrateSpDeposit: Buffer.from([24, 203, 4, 228, 186, 149, 128, 199]),
+  liquidate: Buffer.from([223, 179, 226, 125, 48, 46, 39, 74]),
+  claimSurplus: Buffer.from([95, 73, 158, 127, 131, 104, 189, 65]),
+  setTestPrice: Buffer.from([132, 240, 240, 176, 155, 122, 8, 176]),
+  warpAccrual: Buffer.from([187, 92, 101, 47, 51, 125, 83, 151]),
 };
 
 function u64le(n: bigint) {
@@ -63,7 +63,7 @@ function i64le(n: bigint) {
   return buf;
 }
 
-function data(disc: Uint8Array, ...rest: Uint8Array[]) {
+function data(disc: Buffer, ...rest: Uint8Array[]) {
   const len = disc.length + rest.reduce((n, x) => n + x.length, 0);
   const out = new Uint8Array(len);
   out.set(disc, 0);
@@ -72,7 +72,7 @@ function data(disc: Uint8Array, ...rest: Uint8Array[]) {
     out.set(part, o);
     o += part.length;
   }
-  return out;
+  return Buffer.from(out);
 }
 
 async function mintMeta(connection: Connection, mint: PublicKey) {
