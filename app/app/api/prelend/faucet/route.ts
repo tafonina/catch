@@ -7,17 +7,14 @@ import {
 } from "@solana/spl-token";
 import {
   Connection,
-  Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { rpcUrl } from "@/lib/cluster";
+import { loadServerKeypair } from "@/lib/server-keypair";
 import {
   FAUCET_ANTH,
   FAUCET_ANTH_MAX,
@@ -31,18 +28,13 @@ export const dynamic = "force-dynamic";
 
 const SOL_TOPUP = Math.round(FAUCET_SOL * LAMPORTS_PER_SOL);
 
-function loadAdmin() {
-  const p = process.env.SOLANA_KEYPAIR ?? path.join(os.homedir(), ".config/solana/id.json");
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))));
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { wallet?: string; token?: string; amount?: number };
     const wallet = new PublicKey(body.wallet ?? "");
     const token = body.token === "anthropic" ? "anthropic" : body.token === "sol" ? "sol" : "usdc";
     const connection = new Connection(rpcUrl(), "confirmed");
-    const admin = loadAdmin();
+    const admin = loadServerKeypair();
     const tx = new Transaction();
     const solBefore = await connection.getBalance(wallet);
     const solGap = Math.max(0, SOL_TOPUP - solBefore);

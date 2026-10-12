@@ -24,6 +24,7 @@ export function PriceQuote({
   mark,
   token,
   display,
+  before,
   test = false,
   className = "",
 }: {
@@ -31,17 +32,27 @@ export function PriceQuote({
   mark: number;
   token: number;
   display?: number;
+  before?: number;
   test?: boolean;
   className?: string;
 }) {
   const q = quotePrices(mark, token);
   const shown = display != null && display > 0 ? display : q.used;
+  const original = before != null && before > 0 ? before : q.used;
+  const dropped = test && shown > 0 && original > 0;
   const explain = q.mark > 0 && q.token > 0;
   return (
     <span className={`group relative inline-block ${className}`}>
-      <span className={explain ? "cursor-help border-b border-dotted border-current" : ""}>
-        {shown > 0 ? money(shown) : "—"}
-      </span>
+      {dropped ? (
+        <span className="inline-flex flex-col items-start leading-tight">
+          <span className="text-sky-300 line-through decoration-sky-300/80">{money(original)}</span>
+          <span className="text-red-300">{money(shown)}</span>
+        </span>
+      ) : (
+        <span className={explain ? "cursor-help border-b border-dotted border-current" : ""}>
+          {shown > 0 ? money(shown) : "—"}
+        </span>
+      )}
       {explain ? (
         <span
           className="pointer-events-none absolute left-0 top-full z-50 mt-2 hidden w-64 rounded-2xl border border-white/20 p-3 text-left shadow-2xl group-hover:grid group-focus-within:grid"
