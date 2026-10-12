@@ -1,40 +1,41 @@
 # Catch
 
-Lock PreStocks, borrow USDC, keep the upside. A Stability Pool is funded first so it can take the liquidation.
+Credit against long-tail and private-market tokens, capped by committed exit liquidity.
 
-Catch is over-collateralized lending for [PreStocks](https://prestocks.com) on Solana. Built for [Stocklana](https://stocklana.com). Live on **devnet**.
+Catch is over-collateralized lending for [PreStocks](https://prestocks.com) on Solana. Built for [Stocklana](https://stocklana.com) / Colosseum. Live on **devnet**.
 
-If you hold ANTHROPIC and need dollars, you should not have to sell it.
+If you hold ANTHROPIC and need dollars, you should not have to sell it. If nobody has locked a bid, you cannot borrow.
 
 ## How it works
 
-Three roles, one market.
+Three roles, one isolated market.
 
 | | What you do | What you get |
 |---|---|---|
-| **Borrower** | Lock ANTHROPIC, take USDC (max 30% LTV) | Dollars without selling. 12% APR. Liquidation at 40% |
-| **Lender** | Supply USDC to the vault | Share of the 12% borrowers pay |
-| **Stability Pool** | Park USDC before anyone is liquidated | Seized tokens at a 10% discount |
+| **Borrower** | Lock ANTHROPIC, take USDC (max 30% LTV) | Dollars without selling. Kinked APR (10–30%). Liquidation trims back to 30% |
+| **Senior lender** | Supply USDC that is lent out | Scarcity-weighted share of interest, 5% floor. Never receives the token |
+| **Bidder** | Escrow USDC in a yNFT at your discount | Lock yield on the engaged part + collateral at that discount on liquidation |
 
-When a loan crosses 40% LTV the pool repays the debt and takes the collateral.
+The bid book **is** the debt ceiling. Liquidations fill the book by price–time (tightest discount first) and never sell into a DEX.
 
-The protocol takes **0.5%** once, when the loan opens. Interest goes to lenders.
-
-Collateral is valued at `min(PreStocks mark, DEX TWAP)`. A demo drop (−10/−20/−30/−40%) writes a test price on-chain so you can watch LTV and the loan NFT move.
+The protocol takes **0.5%** once, when the loan opens. 10% of interest goes to the market reserve; the rest splits between senior and engaged bids.
 
 Loan health is a cNFT: **Chad VC** → **Anxious Trader** → **McPepe** → **Rekt**.
+
+A demo drop (−10/−20/−30/−40%) writes a test price on-chain so you can watch LTV and the loan NFT move.
 
 ## Parameters
 
 | | |
 |---|---|
 | Max borrow LTV | 30% |
-| Liquidation LTV | 40% |
-| Borrower APR | 12% (to lenders) |
+| Liquidation LTV | 40% (trim to 30%) |
+| Borrow APR | 10% → 15% at 80% senior util → 30% full |
+| Reserve factor | 10% of interest |
+| Senior floor | 5% of net interest |
 | Protocol fee | 0.5% on borrow |
-| SP bonus | 10% |
-| Debt cap | Stability Pool USDC + DEX depth at 5% impact |
-| Program | `HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd` |
+| Ceiling | USDC locked in the bid book |
+| Program | `5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY` |
 
 ## Run
 
@@ -47,19 +48,21 @@ npm run dev
 
 Open http://localhost:3000. Phantom on **devnet**.
 
+After this layout change, bootstrap the market again (`initialize_pool` + `init_stability_pool`). Old account data will not decode.
+
 ## Repo
 
 ```
-programs/prelend   Anchor program (vaults, LTV, Stability Pool, liquidation)
-app                Next.js dashboard
+programs/prelend   Anchor program (senior vault, yNFT bid book, partial liquidation)
+app                Next.js dashboard + loan NFTs
 scripts            oracle helpers
 ```
 
-Deploy / bootstrap: [`DEPLOY.md`](DEPLOY.md). Layout: [`ARCHITECTURE.md`](ARCHITECTURE.md). What we would ship next: [`IMPROVEMENTS.md`](IMPROVEMENTS.md).
+Deploy / bootstrap: [`DEPLOY.md`](DEPLOY.md). Layout: [`ARCHITECTURE.md`](ARCHITECTURE.md). Next: [`IMPROVEMENTS.md`](IMPROVEMENTS.md). Spec: `Catch — Protocol Spec (Colosseum).md`.
 
 ## Honest limits
 
-- An empty Stability Pool can still produce bad debt.
-- Oracle and DEX depth are posted (keeper). Pyth pre-IPO indices exist but are gated.
-- Test-mode price and +1 month are demo switches. Not for mainnet.
-- Unaudited.
+- An empty bid book produces no credit, not bad debt — that is the point.
+- A gap deeper than the bids can still leave a shortfall for the reserve.
+- Oracle is posted (keeper). Test-mode price and +1 month are demo switches.
+- Unaudited. Redeploy required after the v1.2 account layout.

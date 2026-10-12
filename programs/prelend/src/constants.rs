@@ -36,5 +36,8 @@ pub const SECONDS_PER_YEAR: u64 = 31_536_000;
 /// 1e18 fixed-point base for the borrow index.
 pub const E18: u128 = 1_000_000_000_000_000_000;
 
-/// Current StabilityPool / StabilityDeposit account layout.
-pub const SP_ACCOUNT_VERSION: u8 = 1;
+/// Bid-book account layout (v1.2 yNFT book).
+pub const BID_BOOK_VERSION: u8 = 2;
+
+/// Hard cap on live bids per market (price–time queue on the book account).
+pub const MAX_BIDS: usize = 8;

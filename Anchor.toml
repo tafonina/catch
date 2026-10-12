@@ -7,10 +7,10 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-prelend = "HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd"
+prelend = "5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY"
 
 [programs.devnet]
-prelend = "HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd"
+prelend = "5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY"
 
 [provider]
 cluster = "devnet"

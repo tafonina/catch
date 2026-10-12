@@ -2,6 +2,7 @@ pub mod constants;
 pub mod error;
 pub mod instructions;
 pub mod math;
+pub mod risk;
 pub mod state;
 pub mod token_utils;
 
@@ -9,9 +10,10 @@ use anchor_lang::prelude::*;
 
 pub use constants::*;
 pub use instructions::*;
+pub use risk::RiskParams;
 pub use state::*;
 
-declare_id!("HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd");
+declare_id!("5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY");
 
 #[program]
 pub mod prelend {
@@ -57,8 +59,12 @@ pub mod prelend {
         instructions::stability::handle_init_stability_pool(ctx)
     }
 
-    pub fn deposit_stability(ctx: Context<DepositStability>, amount: u64) -> Result<()> {
-        instructions::stability::handle_deposit_stability(ctx, amount)
+    pub fn deposit_stability(
+        ctx: Context<DepositStability>,
+        amount: u64,
+        discount_bps: u16,
+    ) -> Result<()> {
+        instructions::stability::handle_deposit_stability(ctx, amount, discount_bps)
     }
 
     pub fn withdraw_stability(ctx: Context<WithdrawStability>, amount: u64) -> Result<()> {
@@ -69,24 +75,16 @@ pub mod prelend {
         instructions::stability::handle_claim_stability(ctx)
     }
 
-    pub fn migrate_stability_pool(ctx: Context<MigrateStabilityPool>) -> Result<()> {
-        instructions::stability::handle_migrate_stability_pool(ctx)
-    }
-
-    pub fn migrate_stability_deposit(ctx: Context<MigrateStabilityDeposit>) -> Result<()> {
-        instructions::stability::handle_migrate_stability_deposit(ctx)
-    }
-
     pub fn reset_stability(ctx: Context<ResetStability>) -> Result<()> {
         instructions::stability::handle_reset_stability(ctx)
     }
 
-    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
-        instructions::liquidation::handle_liquidate(ctx)
+    pub fn rebuild_sp_usdc_vault(ctx: Context<RebuildSpUsdcVault>) -> Result<()> {
+        instructions::stability::handle_rebuild_sp_usdc_vault(ctx)
     }
 
-    pub fn external_liquidate(ctx: Context<ExternalLiquidate>) -> Result<()> {
-        instructions::liquidation::handle_external_liquidate(ctx)
+    pub fn liquidate(ctx: Context<Liquidate>) -> Result<()> {
+        instructions::liquidation::handle_liquidate(ctx)
     }
 
     pub fn claim_surplus_collateral(ctx: Context<ClaimSurplusCollateral>) -> Result<()> {
@@ -103,6 +101,10 @@ pub mod prelend {
 
     pub fn reset_pool<'a>(ctx: Context<'a, ResetPool<'a>>) -> Result<()> {
         instructions::admin::handle_reset_pool(ctx)
+    }
+
+    pub fn close_legacy_global<'a>(ctx: Context<'a, CloseLegacyGlobal<'a>>) -> Result<()> {
+        instructions::admin::handle_close_legacy_global(ctx)
     }
 
     #[cfg(feature = "test-mode")]

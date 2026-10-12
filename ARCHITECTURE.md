@@ -1,70 +1,40 @@
-# PreLend architecture
+# Catch architecture (v1.2)
 
-Lending, the Stability Pool, and liquidation are **the same on-chain program**.
+Lending, the bid book, and liquidation are **the same on-chain program**.
 
-| Program | Address / id | Role |
-|---|---|---|
-| **PreLend** | `HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd` | Vaults, LTV, Stability Pool, liquidation |
-| **SPL Token / Token-2022** | `Tokenkeg…` / `TokenzQd…` | Move USDC and PreStocks |
-| **PreStocks tokens** | e.g. `Pren1FvF…` (ANTHROPIC) | Collateral mints |
-| **PreStocks API + DEX TWAP** | posted on-chain | Restricted-mode oracle |
-
-The protocol itself never swaps on a DEX. Liquidations are absorbed by a pre-funded Stability Pool (or an external liquidator). See [`DEPLOY.md`](DEPLOY.md).
-
-## Roles
+| | Role |
+|---|---|
+| **Senior vault** | USDC that is lent out. Earns a scarcity-weighted share of interest (5% floor). |
+| **Bid book (yNFTs)** | USDC escrowed at a chosen discount. Never lent. This sum **is** the market ceiling. |
+| **Borrower** | Locks PreStocks, takes USDC ≤ 30% LTV. Position health is a loan NFT (Chad VC → Rekt). |
+| **Reserve** | 10% of gross interest, per market, first-loss after junior bids. |
 
 ```mermaid
 flowchart LR
-  Lender -->|"deposit_liquidity USDC"| Vault
-  Borrower -->|"borrow_usdc PreStocks in, USDC out"| Vault
-  Borrower -->|"repay_and_withdraw"| Vault
-  SPUser -->|"deposit_stability USDC"| SP
-  Anyone -->|"liquidate"| SP
-  SP -->|"debt USDC"| Vault
-  SP -->|"seized collateral"| SPUsers
-  Borrower -->|"claim surplus"| CollateralVault
+  Bidder -->|"place bid USDC + discount"| Book
+  Senior -->|"deposit USDC"| Vault
+  Borrower -->|"lock PreStocks, borrow"| Vault
+  Anyone -->|"crank if LTV ≥ 40%"| Book
+  Book -->|"partial fill, bidder's price"| Vault
+  Book -->|"tokens at discount"| Bidder
 ```
 
-- **Lender** supplies USDC to the lending vault.
-- **Borrower** locks PreStocks, takes USDC ≤ max LTV, pays 12% APR.
-- **Stability Pool depositor** pre-funds USDC to buy liquidated collateral at a ~10% bonus.
-- **Anyone** can liquidate an underwater position.
-
-## Restricted-mode parameters (Day-0)
-
-| Param | Value |
-|---|---|
-| Max borrow LTV | 30% |
-| Liquidation LTV | 40% |
-| Liquidation bonus | 10% |
-| APR | 12% |
-| Admin debt cap | 25,000 USDC |
-| Staleness | 300s |
-| SP withdraw | instant (USDC + claim tokens) |
-| Demo asset | ANTHROPIC |
-
-Debt after a borrow must stay under `min(admin_ceiling, Stability Pool USDC + posted DEX depth)`.
-
-## Liquidation (worked example)
+## Ceiling
 
 ```
-Price $1,000. Deposit 10 ANTHROPIC ($10,000), borrow $3,000 → LTV 30% (restricted max)
-Price falls to $750 → value $7,500 → LTV 40% → liquidatable
-
-seize   = 3,000 × 1.10 / 750 = 4.4 tokens
-surplus = 5.6 tokens → returned to borrower
-Stability Pool: −$3,000 USDC, +4.4 tokens
-Lender vault:   +$3,000, made whole
+market ceiling = USDC locked in the bid book
 ```
 
-Class A (when a Pyth key is available): 40% borrow LTV / 50% liquidation. Example at $1,000: deposit 10 tokens ($10,000), borrow $4,000; at $800 seize 5.5, surplus 4.5.
+No bids → no loans. New debt + N days of interest must stay under the book.
 
-## Staleness policy
+## Rates
 
-Blocked when a required source is stale: borrow, collateral withdrawal, Stability Pool deposit, liquidation.
+Kinked on senior utilization: 10% → 15% at 80% → 30% full. Net of a 10% reserve factor, interest splits toward whichever side is scarcer. Lock yield goes only to engaged bids (price–time prefix that covers open debt).
 
-Kept open: repay, collateral deposit, lender deposit/withdraw, Stability Pool claim after cooldown.
+## Liquidation
 
-## Oracle panel (UI)
+Atomic and **partial**. One crank sells only enough collateral to restore 30% LTV, filling yNFTs lowest-discount-first. No DEX sale. Borrower NFT stays Chad / Anxious / McPepe if the loan remains open; Rekt only after a full close (dust or insolvent).
 
-Shows PreStocks markPrice, posted DEX TWAP, which `min()` is used, market class (restricted), staleness, and the debt-cap breakdown (pool USDC + depth). Pyth Index feed id is displayed as gated until a `pyth-indices` key exists.
+## Health art
+
+Loan NFT bands are unchanged: **Chad VC** &lt; 30% → Anxious 30–35% → McPepe 35–40% → Liquidatable ≥ 40% → **Rekt** after on-chain close.

@@ -41,12 +41,27 @@ function fmt(n: number, digits = 0) {
   return n.toLocaleString("en-US", { maximumFractionDigits: digits });
 }
 
+const FAUCET_FETCH_MS = 45_000;
+
 async function faucet(wallet: string, token: "usdc" | "anthropic" | "sol", amount?: number) {
-  const res = await fetch("/api/prelend/faucet", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ wallet, token, amount }),
-  });
+  const ctrl = new AbortController();
+  const timer = window.setTimeout(() => ctrl.abort(), FAUCET_FETCH_MS);
+  let res: Response;
+  try {
+    res = await fetch("/api/prelend/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet, token, amount }),
+      signal: ctrl.signal,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error("Faucet timed out (devnet RPC slow — retry Faucet below)");
+    }
+    throw err;
+  } finally {
+    window.clearTimeout(timer);
+  }
   const data = (await res.json()) as {
     error?: string;
     skipped?: boolean;
@@ -153,38 +168,43 @@ export function WalletConnect({ usdc, anthropic, onChanged, onRole }: Props) {
 
   async function loadRole(next: DemoRole) {
     setBusy(next);
+    let wallet = "";
     try {
       const pair = ensureDemoKeypair(next);
+      wallet = pair.publicKey.toBase58();
       setActiveDemoRole(next);
       setWalletIntent("demo");
-      setShown(pair.publicKey.toBase58());
+      setShown(wallet);
       setRole(next);
       notifyWalletChange();
       onRole?.(next);
-      let faucetNote = "";
-      try {
-        if (next === "borrower") {
-          await faucet(pair.publicKey.toBase58(), "anthropic", FAUCET_ANTH);
-        } else {
-          await faucet(pair.publicKey.toBase58(), "usdc", FAUCET_USDC);
-        }
-      } catch (faucetErr) {
-        faucetNote =
-          faucetErr instanceof Error
-            ? ` · faucet failed (${faucetErr.message})`
-            : " · faucet failed (set SOLANA_KEYPAIR on server)";
-      }
-      ping(
-        (next === "borrower"
-          ? `Borrower loaded · ${FAUCET_ANTH} ANTHROPIC`
-          : `${DEMO_ROLE_LABEL[next]} loaded · ${fmt(FAUCET_USDC)} USDC`) + faucetNote,
-      );
       onChanged?.();
+      ping(`${DEMO_ROLE_LABEL[next]} · ${shortKey(wallet)}`);
     } catch (err) {
       ping(err instanceof Error ? err.message : "Load failed");
+      return;
     } finally {
       setBusy(null);
     }
+
+    void (async () => {
+      try {
+        if (next === "borrower") {
+          await faucet(wallet, "anthropic", FAUCET_ANTH);
+          ping(`Sent ${FAUCET_ANTH} ANTH to borrower`);
+        } else {
+          await faucet(wallet, "usdc", FAUCET_USDC);
+          ping(`Sent ${fmt(FAUCET_USDC)} USDC to ${DEMO_ROLE_LABEL[next].toLowerCase()}`);
+        }
+        onChanged?.();
+      } catch (faucetErr) {
+        ping(
+          faucetErr instanceof Error
+            ? faucetErr.message
+            : "Faucet failed — set SOLANA_KEYPAIR on server or use Faucet buttons",
+        );
+      }
+    })();
   }
 
   async function onFaucet(token: "usdc" | "anthropic" | "sol") {
