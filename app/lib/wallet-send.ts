@@ -7,6 +7,13 @@ type PhantomInjected = {
   signTransaction: (tx: Transaction) => Promise<Transaction>;
 };
 
+const CONFIRM_POLL_MS = 1_500;
+const CONFIRM_MAX_MS = 30_000;
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function phantomInjected(): PhantomInjected | undefined {
   if (typeof window === "undefined") return undefined;
   const w = window as unknown as {
@@ -18,60 +25,66 @@ function phantomInjected(): PhantomInjected | undefined {
   return wallet;
 }
 
+async function confirmSignature(connection: Connection, signature: string) {
+  const started = Date.now();
+  while (Date.now() - started < CONFIRM_MAX_MS) {
+    const status = await connection.getSignatureStatus(signature, {
+      searchTransactionHistory: true,
+    });
+    if (status.value?.err) throw status.value.err;
+    const conf = status.value?.confirmationStatus;
+    if (conf === "confirmed" || conf === "finalized") return;
+    await sleep(CONFIRM_POLL_MS);
+  }
+  throw new Error("Transaction not confirmed — check Phantom activity; devnet may be slow");
+}
+
 export async function sendWithPhantom(params: {
   connection: Connection;
   tx: Transaction;
   signTransaction?: (tx: Transaction) => Promise<Transaction>;
   extraSigners?: Keypair[];
 }) {
-  const latest = await params.connection.getLatestBlockhash("confirmed");
+  const demo = isDemoWalletActive() ? demoKeypair() : null;
+
+  const phantom = demo ? null : phantomInjected();
+  if (phantom && !phantom.isConnected) {
+    await phantom.connect();
+  }
+
+  const sign =
+    demo
+      ? null
+      : params.signTransaction ??
+        (phantom?.signTransaction && phantom.isConnected
+          ? (tx: Transaction) => phantom.signTransaction(tx)
+          : undefined);
+  if (!demo && !sign) throw new Error("Reconnect wallet");
+
+  const { blockhash } = await params.connection.getLatestBlockhash("confirmed");
   const fresh = new Transaction();
   for (const ix of params.tx.instructions) fresh.add(ix);
   fresh.feePayer = params.tx.feePayer;
-  fresh.recentBlockhash = latest.blockhash;
+  fresh.recentBlockhash = blockhash;
 
-  const demo = isDemoWalletActive() ? demoKeypair() : null;
   let signed: Transaction;
   if (demo) {
     fresh.feePayer = demo.publicKey;
     fresh.partialSign(demo, ...(params.extraSigners ?? []));
     signed = fresh;
   } else {
-    const phantom = phantomInjected();
-    if (phantom && !phantom.isConnected) {
-      await phantom.connect();
-    }
-    const sign =
-      phantom?.signTransaction && phantom.isConnected
-        ? (tx: Transaction) => phantom.signTransaction(tx)
-        : params.signTransaction;
-    if (!sign) throw new Error("Reconnect wallet");
-    signed = await sign(fresh);
+    signed = await sign!(fresh);
     if (params.extraSigners?.length) signed.partialSign(...params.extraSigners);
   }
+
   const signature = await params.connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: true,
     maxRetries: 5,
   });
-  let err: unknown = null;
+
   try {
-    const confirmed = await params.connection.confirmTransaction(
-      {
-        signature,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      },
-      "confirmed",
-    );
-    err = confirmed.value.err;
-  } catch {
-    const status = await params.connection.getSignatureStatus(signature, {
-      searchTransactionHistory: true,
-    });
-    err = status.value?.err ?? null;
-    if (!status.value) throw new Error("Transaction not confirmed");
-  }
-  if (err) {
+    await confirmSignature(params.connection, signature);
+  } catch (err) {
     let logs = "";
     try {
       const tx = await params.connection.getTransaction(signature, {
@@ -79,11 +92,13 @@ export async function sendWithPhantom(params: {
         maxSupportedTransactionVersion: 0,
       });
       logs = (tx?.meta?.logMessages ?? []).join("\n");
+      if (tx?.meta?.err) throw new Error(txErrMessage(tx.meta.err, logs));
     } catch {
-      logs = "";
+      // use err below
     }
     throw new Error(txErrMessage(err, logs));
   }
+
   return signature;
 }
 
@@ -104,7 +119,10 @@ function txErrMessage(err: unknown, logs = ""): string {
   if (raw.includes("2014") || raw.includes("ConstraintTokenMint")) {
     return "Bid book vault is still on the old USDC mint — rebuild the vault";
   }
+  if (/blockhash not found|BlockhashNotFound/i.test(raw)) {
+    return "Transaction expired — try again";
+  }
   const anchor = logs.match(/Error Message: ([^\n]+)/);
   if (anchor?.[1]) return anchor[1];
-  return raw.includes("InstructionError") ? "Transaction failed" : raw.slice(0, 90);
+  return raw.includes("InstructionError") ? "Transaction failed" : raw.slice(0, 120);
 }

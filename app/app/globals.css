@@ -16,11 +16,15 @@ body {
 }
 
 body {
-  font-family: "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-sans), "Segoe UI", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
   background-image:
     radial-gradient(1200px 500px at 10% -10%, rgba(212, 175, 55, 0.12), transparent 55%),
     radial-gradient(900px 400px at 90% 0%, rgba(56, 189, 248, 0.08), transparent 50%),
     linear-gradient(180deg, #070a10 0%, #05070b 40%, #04060a 100%);
+}
+
+.serif {
+  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
 }
 
 .panel {

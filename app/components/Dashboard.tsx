@@ -1,7 +1,9 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { PublicKey, type Keypair, type Transaction } from "@solana/web3.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -180,6 +182,12 @@ export function Dashboard({
     return signerKey(publicKey);
   }
 
+  function poolCollateralMint() {
+    if (collateralMint) return collateralMint;
+    if (listed.live && listed.id === "anthropic") return MOCK_ANTHROPIC;
+    return null;
+  }
+
   function walletId() {
     return activeKey()?.toBase58() ?? null;
   }
@@ -213,7 +221,14 @@ export function Dashboard({
     const res = await fetch(`/api/prelend/vault${q}`);
     const data = await res.json();
     if (gen !== vaultFetch.current) return;
-    if ((activeKey()?.toBase58() ?? null) !== expected) return;
+
+    const stillSameWallet = (activeKey()?.toBase58() ?? null) === expected;
+    const poolOk = Boolean(data.initialized && typeof data.uiAmount === "number");
+    const walletOk =
+      Boolean(expected) &&
+      stillSameWallet &&
+      (typeof data.wallet === "string" ? data.wallet === expected : Boolean(expected && q));
+
     if (data.stability) {
       const bookUi =
         (Number(data.stability.totalUsdc) + Number(data.stability.legacyUsdc || 0)) / 1e6;
@@ -234,47 +249,18 @@ export function Dashboard({
           .filter((row: BidRow) => row.usdc > 0),
       );
     }
-    if (data.initialized && typeof data.uiAmount === "number") {
+
+    if (typeof data.collateralMint === "string" && data.collateralMint) {
+      setCollateralMint(data.collateralMint);
+    }
+
+    if (poolOk) {
       setVaultOnChain(data.uiAmount);
       setVaultMint(typeof data.mint === "string" ? data.mint : null);
       setFeeRecipient(typeof data.feeRecipient === "string" ? data.feeRecipient : null);
-      setCollateralMint(typeof data.collateralMint === "string" ? data.collateralMint : null);
-      setDeposited(typeof data.lenderValueUi === "number" ? data.lenderValueUi : 0);
-      setUserReady(true);
-      if (expected && typeof data.lenderValueUi === "number") {
-        sessionStorage.setItem(
-          `prelend.bal.${expected}`,
-          JSON.stringify({ deposited: data.lenderValueUi }),
-        );
-      }
-      setUsdcWallet(typeof data.usdcWalletUi === "number" ? data.usdcWalletUi : 0);
       setBorrowedUi(typeof data.totalBorrowedUi === "number" ? data.totalBorrowedUi : 0);
-      {
-        const sp = data.stability ? Number(data.stability.totalUsdc) / 1e6 : 0;
-        setDebtCapUi(sp);
-      }
+      setDebtCapUi(data.stability ? Number(data.stability.totalUsdc) / 1e6 : 0);
       setPoolValueUi(typeof data.poolValueUi === "number" ? data.poolValueUi : 0);
-      setCollWallet(typeof data.collateralWalletUi === "number" ? data.collateralWalletUi : 0);
-      setActiveWallet(typeof data.wallet === "string" ? data.wallet : null);
-      if (data.spPosition) {
-        setMySpUsdc(Number(data.spPosition.usdcUi) || 0);
-        setMySpClaimable(Number(data.spPosition.claimableUi) || 0);
-        setSpNeedsMigrate(Boolean(data.spPosition.needsMigrate || data.stabilityDeposit?.legacy));
-        setSpBlocked(Boolean(data.spPosition.blocked));
-      } else {
-        setMySpUsdc(0);
-        setMySpClaimable(0);
-        setSpNeedsMigrate(Boolean(data.stability?.needsMigrate));
-        setSpBlocked(Boolean(data.stability?.legacyShares > 0 || data.stability?.needsMigrate));
-      }
-      const posOpen = Boolean(data.position && data.position.status === 0);
-      const posLiq = Boolean(data.position && data.position.status === 1);
-      setBorrowedOpen(posOpen);
-      setLoanLiquidated(posLiq);
-      setLoanDebt(typeof data.loanDebtUi === "number" ? data.loanDebtUi : 0);
-      setLoanPrincipal(typeof data.loanPrincipalUi === "number" ? data.loanPrincipalUi : 0);
-      setLoanCollateral(typeof data.loanCollateralUi === "number" ? data.loanCollateralUi : 0);
-      setLastAccrualTs(typeof data.lastAccrualTs === "number" ? data.lastAccrualTs : 0);
       if (typeof data.testModePriceE6 === "number" && data.testModePriceE6 > 0) {
         const test = data.testModePriceE6 / 1e6;
         setTestModePrice(test);
@@ -284,35 +270,63 @@ export function Dashboard({
         const twap = Number(data.oracle.twapPriceE6) / 1e6;
         setTestModePrice(0);
         setOraclePrice(Math.min(mark, twap) || 0);
-      } else {
+      } else if (!walletOk) {
         setTestModePrice(0);
         setOraclePrice(0);
       }
-      const nextPosition = typeof data.positionAddress === "string" ? data.positionAddress : null;
-      setPositionAddr(data.position ? nextPosition : null);
-      if (key && data.position && nextPosition) {
-        try {
-          const found = await findLoanNft(connection, key, nextPosition);
-          setNftMint(found?.toBase58() ?? null);
-        } catch {
-          setNftMint(null);
-        }
-      } else {
-        setNftMint(null);
-      }
+      setLastAccrualTs(typeof data.lastAccrualTs === "number" ? data.lastAccrualTs : 0);
     } else {
       setVaultOnChain(null);
       setVaultMint(null);
     }
+
+    if (!walletOk || !poolOk) return;
+
+    setDeposited(typeof data.lenderValueUi === "number" ? data.lenderValueUi : 0);
+    setUserReady(true);
+    if (expected && typeof data.lenderValueUi === "number") {
+      sessionStorage.setItem(
+        `prelend.bal.${expected}`,
+        JSON.stringify({ deposited: data.lenderValueUi }),
+      );
+    }
+    if (typeof data.usdcWalletUi === "number") setUsdcWallet(data.usdcWalletUi);
+    if (typeof data.collateralWalletUi === "number") setCollWallet(data.collateralWalletUi);
+    setActiveWallet(typeof data.wallet === "string" ? data.wallet : null);
+    if (data.spPosition) {
+      setMySpUsdc(Number(data.spPosition.usdcUi) || 0);
+      setMySpClaimable(Number(data.spPosition.claimableUi) || 0);
+      setSpNeedsMigrate(Boolean(data.spPosition.needsMigrate || data.stabilityDeposit?.legacy));
+      setSpBlocked(Boolean(data.spPosition.blocked));
+    } else {
+      setMySpUsdc(0);
+      setMySpClaimable(0);
+      setSpNeedsMigrate(Boolean(data.stability?.needsMigrate));
+      setSpBlocked(Boolean(data.stability?.legacyShares > 0 || data.stability?.needsMigrate));
+    }
+    const posOpen = Boolean(data.position && data.position.status === 0);
+    const posLiq = Boolean(data.position && data.position.status === 1);
+    setBorrowedOpen(posOpen);
+    setLoanLiquidated(posLiq);
+    setLoanDebt(typeof data.loanDebtUi === "number" ? data.loanDebtUi : 0);
+    setLoanPrincipal(typeof data.loanPrincipalUi === "number" ? data.loanPrincipalUi : 0);
+    setLoanCollateral(typeof data.loanCollateralUi === "number" ? data.loanCollateralUi : 0);
+    const nextPosition = typeof data.positionAddress === "string" ? data.positionAddress : null;
+    setPositionAddr(data.position ? nextPosition : null);
+    if (gen !== vaultFetch.current) return;
+    if (key && data.position && nextPosition) {
+      try {
+        const found = await findLoanNft(connection, key, nextPosition);
+        if (gen === vaultFetch.current) setNftMint(found?.toBase58() ?? null);
+      } catch {
+        if (gen === vaultFetch.current) setNftMint(null);
+      }
+    } else {
+      setNftMint(null);
+    }
   }
 
   async function signSend(tx: Transaction, extraSigners?: Keypair[]) {
-    const injected = (
-      window as unknown as {
-        phantom?: { solana?: { isConnected?: boolean; connect: () => Promise<unknown> } };
-      }
-    ).phantom?.solana;
-    if (!isDemoWalletActive() && injected && !injected.isConnected) await injected.connect();
     await sendWithPhantom({
       connection,
       tx,
@@ -453,23 +467,30 @@ export function Dashboard({
     if (Number(lendInput) > withdrawable + 1e-6) return ping("Only your idle pool cash can be withdrawn");
     setBusy("withdraw");
     try {
-      await signSend(
-        await buildWithdrawTx({
-          connection,
-          lender: key,
-          usdcMint: new PublicKey(vaultMint),
-          collateralMint: new PublicKey(collateralMint),
-          uiAmount: amount,
-        }),
-      );
+      const tx = await buildWithdrawTx({
+        connection,
+        lender: key,
+        usdcMint: new PublicKey(vaultMint),
+        collateralMint: new PublicKey(collateralMint),
+        uiAmount: amount,
+        fast:
+          withdrawable > 0
+            ? {
+                tokenProgram: TOKEN_PROGRAM_ID,
+                decimals: 6,
+                lenderHasUsdcAta: true,
+              }
+            : undefined,
+      });
+      await signSend(tx);
       setLendInput("");
-      await fetchVault();
       ping(`Withdrew ${formatUsd(amount)}`);
     } catch (err) {
       fail(err, "Withdraw failed");
     } finally {
       setBusy(null);
     }
+    void fetchVault();
   }
 
   async function onBorrow() {
@@ -543,7 +564,8 @@ export function Dashboard({
   async function simulateDrop(dropPct: 10 | 20 | 30 | 40) {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
-    if (!vaultMint || !collateralMint) return ping("Pool unavailable");
+    const mint = poolCollateralMint();
+    if (!mint) return ping("Pool unavailable");
     setBusy("drop");
     try {
       const used = selected
@@ -553,13 +575,13 @@ export function Dashboard({
       await signSend(
         buildSetTestPriceTx({
           caller: key,
-          collateralMint: new PublicKey(collateralMint),
+          collateralMint: new PublicKey(mint),
           priceE6: BigInt(Math.round(used * shock * 1e6)),
         }),
       );
       setPriceShock(shock);
       setTestModePrice(used * shock);
-      await fetchVault();
+      void fetchVault();
       ping(`Price −${dropPct}%`);
     } catch (err) {
       fail(err, "Price update failed");
@@ -573,11 +595,12 @@ export function Dashboard({
     if (!key) return ping("Connect wallet");
     setBusy("drop");
     try {
-      if (!collateralMint) return ping("Pool unavailable");
+      const mint = poolCollateralMint();
+      if (!mint) return ping("Pool unavailable");
       await signSend(
         buildSetTestPriceTx({
           caller: key,
-          collateralMint: new PublicKey(collateralMint),
+          collateralMint: new PublicKey(mint),
           priceE6: 0n,
         }),
       );
@@ -595,13 +618,14 @@ export function Dashboard({
   async function warpOneMonth() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
-    if (!collateralMint) return ping("Pool unavailable");
+    const mint = poolCollateralMint();
+    if (!mint) return ping("Pool unavailable");
     setBusy("drop");
     try {
       await signSend(
         buildWarpAccrualTx({
           caller: key,
-          collateralMint: new PublicKey(collateralMint),
+          collateralMint: new PublicKey(mint),
           extraSecs: 2_628_000n,
         }),
       );
@@ -770,13 +794,19 @@ export function Dashboard({
     <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <img
-            src="/catch-mark.svg"
-            alt="Catch"
-            className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
-          />
+          <Link href="/" className="shrink-0">
+            <img
+              src="/catch-mark.svg"
+              alt=""
+              className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
+            />
+          </Link>
           <div>
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Catch</h1>
+            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+              <Link href="/" className="hover:text-amber-200">
+                Catch
+              </Link>
+            </h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
               Isolated markets. Credit is capped by the bid book in that pool only.
             </p>
@@ -793,15 +823,20 @@ export function Dashboard({
       </header>
 
       <div className="mb-6">
-        {onBack ? (
-          <button
-            type="button"
-            onClick={onBack}
-            className="mb-1 text-xs uppercase tracking-widest text-slate-500 hover:text-amber-200"
-          >
-            ← Markets
-          </button>
-        ) : null}
+        <div className="mb-1 flex gap-4 text-xs uppercase tracking-widest">
+          <Link href="/" className="text-slate-500 hover:text-amber-200">
+            ← Landing
+          </Link>
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="text-slate-500 hover:text-amber-200"
+            >
+              ← Markets
+            </button>
+          ) : null}
+        </div>
         <h2 className="text-xl font-semibold tracking-tight sm:text-2xl">{marketLabel(listed)}</h2>
         <p className="mt-1 max-w-xl text-sm text-slate-400">
           Isolated pool. LTV and rates apply only here. Credit is capped by this bid book.

@@ -75,10 +75,17 @@ function data(disc: Buffer, ...rest: Uint8Array[]) {
   return Buffer.from(out);
 }
 
+const mintMetaCache = new Map<string, { tokenProgram: PublicKey; decimals: number }>();
+
 async function mintMeta(connection: Connection, mint: PublicKey) {
+  const key = mint.toBase58();
+  const hit = mintMetaCache.get(key);
+  if (hit) return hit;
   const info = await connection.getAccountInfo(mint);
   if (!info) throw new Error("Mint not found");
-  return { tokenProgram: info.owner, decimals: info.data[44] };
+  const meta = { tokenProgram: info.owner, decimals: info.data[44] };
+  mintMetaCache.set(key, meta);
+  return meta;
 }
 
 function ata(mint: PublicKey, owner: PublicKey, tokenProgram: PublicKey) {
@@ -91,12 +98,22 @@ export async function buildWithdrawTx(params: {
   usdcMint: PublicKey;
   collateralMint: PublicKey;
   uiAmount: number;
+  /** Pool USDC: skip mint + ATA RPC when lender already has a position (typical withdraw). */
+  fast?: { tokenProgram: PublicKey; decimals: number; lenderHasUsdcAta: boolean };
 }) {
-  const { tokenProgram, decimals } = await mintMeta(params.connection, params.usdcMint);
+  const { tokenProgram, decimals } = params.fast
+    ? { tokenProgram: params.fast.tokenProgram, decimals: params.fast.decimals }
+    : await mintMeta(params.connection, params.usdcMint);
   const amount = BigInt(Math.floor(params.uiAmount * 10 ** decimals + 1e-9));
   const lenderUsdc = ata(params.usdcMint, params.lender, tokenProgram);
   const tx = new Transaction();
-  if (!(await params.connection.getAccountInfo(lenderUsdc))) {
+  let needsAta = false;
+  if (params.fast?.lenderHasUsdcAta) {
+    needsAta = false;
+  } else if (!(await params.connection.getAccountInfo(lenderUsdc))) {
+    needsAta = true;
+  }
+  if (needsAta) {
     tx.add(
       createAssociatedTokenAccountIdempotentInstruction(
         params.lender,

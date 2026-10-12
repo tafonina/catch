@@ -290,6 +290,12 @@ async function openDebtUi(
   return Number(atoms) / 1e6;
 }
 
+function collateralMintBase58(market: PublicKey, parsed: ReturnType<typeof decodeConfig> | null) {
+  const fromConfig = parsed?.collateralMint;
+  if (fromConfig && fromConfig !== PublicKey.default.toBase58()) return fromConfig;
+  return market.toBase58();
+}
+
 export async function resolveCollateralMint(connection: Connection, programId = prelendProgramId()) {
   const mock = new PublicKey(MOCK_ANTHROPIC);
   const main = new PublicKey(ANTHROPIC_MAINNET);
@@ -341,6 +347,7 @@ export async function readUsdcVault(connection = new Connection(rpcUrl(), "confi
       vault: vault.toBase58(),
       config: config.toBase58(),
       mint: account.mint.toBase58(),
+      collateralMint: collateralMintBase58(market, parsed),
       amountAtoms: account.amount.toString(),
       uiAmount: vaultUi,
       totalBorrowedUi: borrowedUi,
@@ -362,6 +369,7 @@ export async function readUsdcVault(connection = new Connection(rpcUrl(), "confi
       programId: programId.toBase58(),
       vault: vault.toBase58(),
       config: config.toBase58(),
+      collateralMint: market.toBase58(),
     };
   }
 }
