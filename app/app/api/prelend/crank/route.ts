@@ -1,24 +1,17 @@
 import { NextResponse } from "next/server";
 import { Connection, Keypair, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { updateOracleIx } from "@/lib/anchor-ix";
+import { loadServerKeypair } from "@/lib/server-keypair";
 import { resolveCollateralMint } from "@/lib/prelend";
 import { rpcUrl } from "@/lib/cluster";
 import type { PreStock } from "@/lib/prestocks";
 
 export const dynamic = "force-dynamic";
 
-function loadKeypair() {
-  const p = process.env.SOLANA_KEYPAIR ?? path.join(os.homedir(), ".config/solana/id.json");
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))));
-}
-
 export async function POST() {
   try {
     const connection = new Connection(rpcUrl(), "confirmed");
-    const admin = loadKeypair();
+    const admin = loadServerKeypair();
     const mint = await resolveCollateralMint(connection);
     const res = await fetch("https://prestocks.com/api/prestocks", { cache: "no-store" });
     const stocks = (await res.json()) as PreStock[];

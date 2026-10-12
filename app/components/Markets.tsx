@@ -21,6 +21,7 @@ type VaultSnap = {
   totalBorrowedUi?: number;
   usdcWalletUi?: number;
   collateralWalletUi?: number;
+  testModePriceE6?: number;
   stability?: { totalUsdc?: number; legacyUsdc?: number };
 };
 
@@ -90,6 +91,7 @@ export function Markets({
   const available = vault?.uiAmount ?? 0;
   const book =
     ((vault?.stability?.totalUsdc ?? 0) + (vault?.stability?.legacyUsdc ?? 0)) / 1e6;
+  const testPrice = (vault?.testModePriceE6 ?? 0) / 1e6;
   const yields = marketYields({ borrowed, senior: supply, book });
   const ready = Boolean(vault?.initialized);
 
@@ -177,6 +179,7 @@ export function Markets({
             depositApr={market.live ? yields.depositApr : null}
             borrowApr={market.live ? yields.borrowApr : null}
             bidApr={market.live ? yields.bidApr : null}
+            testPrice={market.live ? testPrice : 0}
             onOpen={onOpen}
           />
         ))}
@@ -197,6 +200,7 @@ function MarketRow({
   depositApr,
   borrowApr: borrow,
   bidApr,
+  testPrice,
   onOpen,
 }: {
   market: IsolatedMarket;
@@ -210,6 +214,7 @@ function MarketRow({
   depositApr: number | null;
   borrowApr: number | null;
   bidApr: number | null;
+  testPrice: number;
   onOpen: (id: string, tab?: MarketTab) => void;
 }) {
   const dash = !market.live || !ready;
@@ -249,7 +254,9 @@ function MarketRow({
             <PriceQuote
               mark={stock.markPrice}
               token={stock.tokenPrice}
-              display={stock.tokenPrice}
+              display={market.live && testPrice > 0 ? testPrice : stock.tokenPrice}
+              before={stock.tokenPrice}
+              test={market.live && testPrice > 0}
               name={tokenLabel(stock.name)}
               className="text-sky-300"
             />

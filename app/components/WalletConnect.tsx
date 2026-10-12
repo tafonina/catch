@@ -161,15 +161,23 @@ export function WalletConnect({ usdc, anthropic, onChanged, onRole }: Props) {
       setRole(next);
       notifyWalletChange();
       onRole?.(next);
-      if (next === "borrower") {
-        await faucet(pair.publicKey.toBase58(), "anthropic", FAUCET_ANTH);
-      } else {
-        await faucet(pair.publicKey.toBase58(), "usdc", FAUCET_USDC);
+      let faucetNote = "";
+      try {
+        if (next === "borrower") {
+          await faucet(pair.publicKey.toBase58(), "anthropic", FAUCET_ANTH);
+        } else {
+          await faucet(pair.publicKey.toBase58(), "usdc", FAUCET_USDC);
+        }
+      } catch (faucetErr) {
+        faucetNote =
+          faucetErr instanceof Error
+            ? ` · faucet failed (${faucetErr.message})`
+            : " · faucet failed (set SOLANA_KEYPAIR on server)";
       }
       ping(
-        next === "borrower"
+        (next === "borrower"
           ? `Borrower loaded · ${FAUCET_ANTH} ANTHROPIC`
-          : `${DEMO_ROLE_LABEL[next]} loaded · ${fmt(FAUCET_USDC)} USDC`,
+          : `${DEMO_ROLE_LABEL[next]} loaded · ${fmt(FAUCET_USDC)} USDC`) + faucetNote,
       );
       onChanged?.();
     } catch (err) {
