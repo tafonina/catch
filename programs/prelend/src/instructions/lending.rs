@@ -1,31 +1,31 @@
 use crate::constants::*;
 use crate::error::PreLendError;
+use crate::risk::RiskParams;
 use crate::state::*;
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
-
-// ─── InitializePool ─────────────────────────────────────────────────────────
 
 #[derive(Accounts)]
 pub struct InitializePool<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub collateral_mint: InterfaceAccount<'info, Mint>,
     /// CHECK: recipient of origination fees
     pub fee_recipient: UncheckedAccount<'info>,
     #[account(
         init,
         payer = admin,
         space = 8 + GlobalConfig::INIT_SPACE,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, collateral_mint.key().as_ref()],
         bump
     )]
     pub config: Account<'info, GlobalConfig>,
     #[account(
         init,
         payer = admin,
-        seeds = [USDC_VAULT_SEED],
+        seeds = [USDC_VAULT_SEED, collateral_mint.key().as_ref()],
         bump,
         token::mint = usdc_mint,
         token::authority = config,
@@ -46,10 +46,16 @@ pub fn handle_initialize_pool(
         risk_params.liquidation_ltv_bps > risk_params.max_borrow_ltv_bps,
         PreLendError::LtvExceeded
     );
+    require!(
+        risk_params.target_ltv_bps > 0
+            && risk_params.target_ltv_bps <= risk_params.max_borrow_ltv_bps,
+        PreLendError::LtvExceeded
+    );
     let now = Clock::get()?.unix_timestamp;
     let config = &mut ctx.accounts.config;
     config.admin = ctx.accounts.admin.key();
     config.usdc_mint = ctx.accounts.usdc_mint.key();
+    config.collateral_mint = ctx.accounts.collateral_mint.key();
     config.fee_recipient = ctx.accounts.fee_recipient.key();
     config.protocol_fee_bps = protocol_fee_bps;
     config.risk_params = risk_params;
@@ -60,48 +66,58 @@ pub fn handle_initialize_pool(
     config.paused = false;
     config.total_deposits = 0;
     config.total_borrowed = 0;
+    config.senior_assets = 0;
+    config.reserve_usdc = 0;
     config.bump = ctx.bumps.config;
     config.usdc_vault_bump = ctx.bumps.usdc_vault;
     Ok(())
 }
 
-// ─── DepositLiquidity ───────────────────────────────────────────────────────
+fn senior_pool_value(vault: u64, borrowed: u64, reserve: u64) -> Result<u64> {
+    vault
+        .checked_add(borrowed)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_sub(reserve.min(vault.saturating_add(borrowed)))
+        .ok_or(PreLendError::MathOverflow.into())
+}
 
 #[derive(Accounts)]
 pub struct DepositLiquidity<'info> {
     #[account(mut)]
     pub lender: Signer<'info>,
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub collateral_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, collateral_mint.key().as_ref()],
         bump = config.bump,
-        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint
+        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint,
+        constraint = config.collateral_mint == collateral_mint.key() @ PreLendError::MintNotAdmitted
     )]
-    pub config: Account<'info, GlobalConfig>,
+    pub config: Box<Account<'info, GlobalConfig>>,
     #[account(
         mut,
         associated_token::mint = usdc_mint,
         associated_token::authority = lender,
         associated_token::token_program = token_program
     )]
-    pub lender_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub lender_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        seeds = [USDC_VAULT_SEED],
+        seeds = [USDC_VAULT_SEED, collateral_mint.key().as_ref()],
         bump = config.usdc_vault_bump,
         token::mint = usdc_mint,
         token::authority = config
     )]
-    pub usdc_vault: InterfaceAccount<'info, TokenAccount>,
+    pub usdc_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = lender,
         space = 8 + LenderAccount::INIT_SPACE,
-        seeds = [LENDER_SEED, lender.key().as_ref()],
+        seeds = [LENDER_SEED, lender.key().as_ref(), collateral_mint.key().as_ref()],
         bump
     )]
-    pub lender_account: Account<'info, LenderAccount>,
+    pub lender_account: Box<Account<'info, LenderAccount>>,
     pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
@@ -111,12 +127,11 @@ pub fn handle_deposit_liquidity(ctx: Context<DepositLiquidity>, amount: u64) -> 
     let now = Clock::get()?.unix_timestamp;
     ctx.accounts.config.accrue_interest(now)?;
 
-    let pool_value = ctx
-        .accounts
-        .usdc_vault
-        .amount
-        .checked_add(ctx.accounts.config.total_borrowed)
-        .ok_or(PreLendError::MathOverflow)?;
+    let pool_value = senior_pool_value(
+        ctx.accounts.usdc_vault.amount,
+        ctx.accounts.config.total_borrowed,
+        ctx.accounts.config.reserve_usdc,
+    )?;
     let new_shares = crate::math::shares_for_deposit(
         amount,
         ctx.accounts.config.total_deposits,
@@ -149,45 +164,51 @@ pub fn handle_deposit_liquidity(ctx: Context<DepositLiquidity>, amount: u64) -> 
         .total_deposits
         .checked_add(new_shares)
         .ok_or(PreLendError::MathOverflow)?;
+    ctx.accounts.config.senior_assets = ctx
+        .accounts
+        .config
+        .senior_assets
+        .checked_add(amount)
+        .ok_or(PreLendError::MathOverflow)?;
     Ok(())
 }
-
-// ─── WithdrawLiquidity ──────────────────────────────────────────────────────
 
 #[derive(Accounts)]
 pub struct WithdrawLiquidity<'info> {
     #[account(mut)]
     pub lender: Signer<'info>,
-    pub usdc_mint: InterfaceAccount<'info, Mint>,
+    pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
+    pub collateral_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, collateral_mint.key().as_ref()],
         bump = config.bump,
-        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint
+        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint,
+        constraint = config.collateral_mint == collateral_mint.key() @ PreLendError::MintNotAdmitted
     )]
-    pub config: Account<'info, GlobalConfig>,
+    pub config: Box<Account<'info, GlobalConfig>>,
     #[account(
         mut,
         associated_token::mint = usdc_mint,
         associated_token::authority = lender,
         associated_token::token_program = token_program
     )]
-    pub lender_usdc: InterfaceAccount<'info, TokenAccount>,
+    pub lender_usdc: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        seeds = [USDC_VAULT_SEED],
+        seeds = [USDC_VAULT_SEED, collateral_mint.key().as_ref()],
         bump = config.usdc_vault_bump,
         token::mint = usdc_mint,
         token::authority = config
     )]
-    pub usdc_vault: InterfaceAccount<'info, TokenAccount>,
+    pub usdc_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        seeds = [LENDER_SEED, lender.key().as_ref()],
+        seeds = [LENDER_SEED, lender.key().as_ref(), collateral_mint.key().as_ref()],
         bump = lender_account.bump,
         constraint = lender_account.owner == lender.key() @ PreLendError::Unauthorized
     )]
-    pub lender_account: Account<'info, LenderAccount>,
+    pub lender_account: Box<Account<'info, LenderAccount>>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -196,12 +217,11 @@ pub fn handle_withdraw_liquidity(ctx: Context<WithdrawLiquidity>, amount: u64) -
     let now = Clock::get()?.unix_timestamp;
     ctx.accounts.config.accrue_interest(now)?;
 
-    let pool_value = ctx
-        .accounts
-        .usdc_vault
-        .amount
-        .checked_add(ctx.accounts.config.total_borrowed)
-        .ok_or(PreLendError::MathOverflow)?;
+    let pool_value = senior_pool_value(
+        ctx.accounts.usdc_vault.amount,
+        ctx.accounts.config.total_borrowed,
+        ctx.accounts.config.reserve_usdc,
+    )?;
     let max_assets = crate::math::assets_from_shares(
         ctx.accounts.lender_account.deposited,
         ctx.accounts.config.total_deposits,
@@ -228,7 +248,8 @@ pub fn handle_withdraw_liquidity(ctx: Context<WithdrawLiquidity>, amount: u64) -
         PreLendError::InsufficientDeposits
     );
 
-    let seeds: &[&[u8]] = &[CONFIG_SEED, &[ctx.accounts.config.bump]];
+    let mint = ctx.accounts.collateral_mint.key();
+    let seeds: &[&[u8]] = &[CONFIG_SEED, mint.as_ref(), &[ctx.accounts.config.bump]];
     crate::token_utils::transfer_checked_signed(
         ctx.accounts.token_program.key(),
         ctx.accounts.usdc_vault.to_account_info(),
@@ -246,10 +267,9 @@ pub fn handle_withdraw_liquidity(ctx: Context<WithdrawLiquidity>, amount: u64) -
         .config
         .total_deposits
         .saturating_sub(shares_burned);
+    ctx.accounts.config.senior_assets = ctx.accounts.config.senior_assets.saturating_sub(amount);
     Ok(())
 }
-
-// ─── BorrowUsdc ─────────────────────────────────────────────────────────────
 
 #[derive(Accounts)]
 pub struct BorrowUsdc<'info> {
@@ -259,9 +279,10 @@ pub struct BorrowUsdc<'info> {
     pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, collateral_mint.key().as_ref()],
         bump = config.bump,
-        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint
+        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint,
+        constraint = config.collateral_mint == collateral_mint.key() @ PreLendError::MintNotAdmitted
     )]
     pub config: Box<Account<'info, GlobalConfig>>,
     #[account(
@@ -273,7 +294,8 @@ pub struct BorrowUsdc<'info> {
     #[account(
         seeds = [STABILITY_POOL_SEED, collateral_mint.key().as_ref()],
         bump = stability_pool.bump,
-        constraint = stability_pool.collateral_mint == collateral_mint.key()
+        constraint = stability_pool.collateral_mint == collateral_mint.key(),
+        constraint = stability_pool.version == BID_BOOK_VERSION @ PreLendError::MintNotAdmitted
     )]
     pub stability_pool: Box<Account<'info, StabilityPool>>,
     #[account(
@@ -303,7 +325,7 @@ pub struct BorrowUsdc<'info> {
     pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        seeds = [USDC_VAULT_SEED],
+        seeds = [USDC_VAULT_SEED, collateral_mint.key().as_ref()],
         bump = config.usdc_vault_bump,
         token::mint = usdc_mint,
         token::authority = config
@@ -341,6 +363,11 @@ pub fn handle_borrow_usdc(
     require!(collateral_amount > 0, PreLendError::ZeroAmount);
     require!(borrow_amount > 0, PreLendError::ZeroAmount);
     require!(!ctx.accounts.config.paused, PreLendError::PoolPaused);
+    require!(
+        ctx.accounts.collateral_mint.to_account_info().owner != &anchor_spl::token_2022::ID
+            || ctx.accounts.collateral_mint.decimals > 0,
+        PreLendError::MintNotAdmitted
+    );
 
     let now = Clock::get()?.unix_timestamp;
     ctx.accounts.config.accrue_interest(now)?;
@@ -352,6 +379,12 @@ pub fn handle_borrow_usdc(
         ctx.accounts.oracle.twap_updated_at,
         now,
         ctx.accounts.config.risk_params.price_staleness_secs,
+        ctx.accounts.config.test_mode_price_e6,
+    )?;
+    crate::math::assert_spread_ok(
+        ctx.accounts.oracle.mark_price_e6,
+        ctx.accounts.oracle.twap_price_e6,
+        ctx.accounts.stability_pool.min_discount_bps(),
         ctx.accounts.config.test_mode_price_e6,
     )?;
 
@@ -366,18 +399,19 @@ pub fn handle_borrow_usdc(
         PreLendError::LtvExceeded
     );
 
-    // Debt cap: total outstanding <= what the backstop can absorb (SP USDC + DEX depth).
-    let cap = ctx
+    let rate = ctx.accounts.config.current_rate_bps()?;
+    let next_debt = ctx
         .accounts
-        .stability_pool
-        .available_usdc()
-        .saturating_add(ctx.accounts.config.posted_depth);
+        .config
+        .total_borrowed
+        .saturating_add(borrow_amount);
+    let headroom = crate::math::interest_headroom(
+        next_debt,
+        rate,
+        ctx.accounts.config.risk_params.interest_headroom_secs,
+    )?;
     require!(
-        ctx.accounts
-            .config
-            .total_borrowed
-            .saturating_add(borrow_amount)
-            <= cap,
+        next_debt.saturating_add(headroom) <= ctx.accounts.stability_pool.total_usdc,
         PreLendError::DebtCapExceeded
     );
 
@@ -390,7 +424,6 @@ pub fn handle_borrow_usdc(
         PreLendError::InsufficientLiquidity
     );
 
-    // Collateral in
     crate::token_utils::transfer_checked(
         ctx.accounts.token_program.key(),
         ctx.accounts.borrower_collateral.to_account_info(),
@@ -401,8 +434,8 @@ pub fn handle_borrow_usdc(
         ctx.accounts.collateral_mint.decimals,
     )?;
 
-    // USDC to borrower
-    let config_seeds: &[&[u8]] = &[CONFIG_SEED, &[ctx.accounts.config.bump]];
+    let mint = ctx.accounts.collateral_mint.key();
+    let config_seeds: &[&[u8]] = &[CONFIG_SEED, mint.as_ref(), &[ctx.accounts.config.bump]];
     crate::token_utils::transfer_checked_signed(
         ctx.accounts.token_program.key(),
         ctx.accounts.usdc_vault.to_account_info(),
@@ -428,6 +461,7 @@ pub fn handle_borrow_usdc(
 
     let scaled_debt =
         crate::math::scaled_amount(borrow_amount, ctx.accounts.config.borrow_index_e18)?;
+    require!(scaled_debt > 0, PreLendError::ZeroAmount);
 
     {
         let position = &mut ctx.accounts.position;
@@ -442,12 +476,7 @@ pub fn handle_borrow_usdc(
         position.bump = ctx.bumps.position;
     }
 
-    ctx.accounts.config.total_borrowed = ctx
-        .accounts
-        .config
-        .total_borrowed
-        .checked_add(borrow_amount)
-        .ok_or(PreLendError::MathOverflow)?;
+    ctx.accounts.config.total_borrowed = next_debt;
 
     emit!(LoanOpened {
         borrower: ctx.accounts.borrower.key(),
@@ -470,8 +499,6 @@ pub struct LoanOpened {
     pub ltv_bps: u64,
 }
 
-// ─── RepayAndWithdraw ───────────────────────────────────────────────────────
-
 #[derive(Accounts)]
 pub struct RepayAndWithdraw<'info> {
     #[account(mut)]
@@ -480,9 +507,10 @@ pub struct RepayAndWithdraw<'info> {
     pub usdc_mint: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, collateral_mint.key().as_ref()],
         bump = config.bump,
-        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint
+        constraint = config.usdc_mint == usdc_mint.key() @ PreLendError::InvalidUsdcMint,
+        constraint = config.collateral_mint == collateral_mint.key() @ PreLendError::MintNotAdmitted
     )]
     pub config: Box<Account<'info, GlobalConfig>>,
     #[account(
@@ -510,7 +538,7 @@ pub struct RepayAndWithdraw<'info> {
     pub borrower_collateral: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
-        seeds = [USDC_VAULT_SEED],
+        seeds = [USDC_VAULT_SEED, collateral_mint.key().as_ref()],
         bump = config.usdc_vault_bump,
         token::mint = usdc_mint,
         token::authority = config
@@ -524,6 +552,21 @@ pub struct RepayAndWithdraw<'info> {
         token::authority = config
     )]
     pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+    #[account(
+        mut,
+        seeds = [STABILITY_POOL_SEED, collateral_mint.key().as_ref()],
+        bump = stability_pool.bump,
+        constraint = stability_pool.collateral_mint == collateral_mint.key()
+    )]
+    pub stability_pool: Box<Account<'info, StabilityPool>>,
+    #[account(
+        mut,
+        seeds = [SP_USDC_VAULT_SEED, collateral_mint.key().as_ref()],
+        bump,
+        token::mint = usdc_mint,
+        token::authority = stability_pool
+    )]
+    pub sp_usdc_vault: Box<InterfaceAccount<'info, TokenAccount>>,
     pub token_program: Interface<'info, TokenInterface>,
 }
 
@@ -541,8 +584,9 @@ pub fn handle_repay_and_withdraw(ctx: Context<RepayAndWithdraw>) -> Result<()> {
         ctx.accounts.config.borrow_index_e18,
     )?;
     let collateral_amount = ctx.accounts.position.collateral_amount;
+    let principal = ctx.accounts.position.usdc_amount;
+    let interest = debt.saturating_sub(principal);
 
-    // Borrower repays actual debt (principal + accrued interest)
     crate::token_utils::transfer_checked(
         ctx.accounts.token_program.key(),
         ctx.accounts.borrower_usdc.to_account_info(),
@@ -553,8 +597,8 @@ pub fn handle_repay_and_withdraw(ctx: Context<RepayAndWithdraw>) -> Result<()> {
         ctx.accounts.usdc_mint.decimals,
     )?;
 
-    // Return collateral
-    let config_seeds: &[&[u8]] = &[CONFIG_SEED, &[ctx.accounts.config.bump]];
+    let mint = ctx.accounts.collateral_mint.key();
+    let config_seeds: &[&[u8]] = &[CONFIG_SEED, mint.as_ref(), &[ctx.accounts.config.bump]];
     crate::token_utils::transfer_checked_signed(
         ctx.accounts.token_program.key(),
         ctx.accounts.collateral_vault.to_account_info(),
@@ -566,11 +610,52 @@ pub fn handle_repay_and_withdraw(ctx: Context<RepayAndWithdraw>) -> Result<()> {
         &[config_seeds],
     )?;
 
+    let (reserve, _senior, junior) = crate::math::split_interest(
+        interest,
+        ctx.accounts.config.total_borrowed,
+        ctx.accounts.config.senior_assets.max(1),
+        ctx.accounts.stability_pool.total_usdc.max(1),
+        &ctx.accounts.config.risk_params,
+    )?;
+    ctx.accounts.config.reserve_usdc = ctx
+        .accounts
+        .config
+        .reserve_usdc
+        .checked_add(reserve)
+        .ok_or(PreLendError::MathOverflow)?;
+    if junior > 0 && ctx.accounts.stability_pool.total_usdc > 0 {
+        crate::token_utils::transfer_checked_signed(
+            ctx.accounts.token_program.key(),
+            ctx.accounts.usdc_vault.to_account_info(),
+            ctx.accounts.usdc_mint.to_account_info(),
+            ctx.accounts.sp_usdc_vault.to_account_info(),
+            ctx.accounts.config.to_account_info(),
+            junior,
+            ctx.accounts.usdc_mint.decimals,
+            &[config_seeds],
+        )?;
+        ctx.accounts.config.senior_assets =
+            ctx.accounts.config.senior_assets.saturating_sub(junior);
+        let needed = ctx
+            .accounts
+            .config
+            .total_borrowed
+            .min(ctx.accounts.stability_pool.total_usdc);
+        ctx.accounts
+            .stability_pool
+            .credit_lock_yield(junior, needed)?;
+    }
+    ctx.accounts.config.senior_assets = ctx
+        .accounts
+        .config
+        .senior_assets
+        .saturating_add(interest)
+        .saturating_sub(reserve);
     ctx.accounts.config.total_borrowed = ctx
         .accounts
         .config
         .total_borrowed
-        .saturating_sub(ctx.accounts.position.usdc_amount);
+        .saturating_sub(principal);
 
     emit!(LoanRepaid {
         borrower: ctx.accounts.borrower.key(),

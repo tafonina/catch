@@ -11,9 +11,10 @@ pub struct UpdateOracle<'info> {
     pub admin: Signer<'info>,
     pub mint: InterfaceAccount<'info, Mint>,
     #[account(
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, mint.key().as_ref()],
         bump = config.bump,
         has_one = admin @ PreLendError::Unauthorized,
+        constraint = config.collateral_mint == mint.key() @ PreLendError::MintNotAdmitted,
     )]
     pub config: Account<'info, GlobalConfig>,
     #[account(
@@ -75,10 +76,12 @@ pub struct OracleUpdated {
 #[derive(Accounts)]
 pub struct SetTestPrice<'info> {
     pub caller: Signer<'info>,
+    pub mint: InterfaceAccount<'info, Mint>,
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
+        seeds = [CONFIG_SEED, mint.key().as_ref()],
         bump = config.bump,
+        constraint = config.collateral_mint == mint.key() @ PreLendError::MintNotAdmitted,
     )]
     pub config: Account<'info, GlobalConfig>,
 }

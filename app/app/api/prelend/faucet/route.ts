@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  createAssociatedTokenAccountIdempotent,
+  createAssociatedTokenAccountIdempotentInstruction,
   createMintToInstruction,
   getAccount,
+  getAssociatedTokenAddressSync,
   getMint,
+  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import {
   Connection,
@@ -27,6 +29,24 @@ import { MOCK_ANTHROPIC, readUsdcVault } from "@/lib/prelend";
 export const dynamic = "force-dynamic";
 
 const SOL_TOPUP = Math.round(FAUCET_SOL * LAMPORTS_PER_SOL);
+const CONFIRM_MS = 40_000;
+
+async function sendAndConfirm(
+  connection: Connection,
+  tx: Transaction,
+  signers: Parameters<typeof sendAndConfirmTransaction>[2],
+) {
+  tx.feePayer = signers[0].publicKey;
+  tx.recentBlockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
+  const send = sendAndConfirmTransaction(connection, tx, signers, {
+    commitment: "confirmed",
+    maxRetries: 3,
+  });
+  const timeout = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error("Devnet confirm timeout — retry faucet")), CONFIRM_MS);
+  });
+  return Promise.race([send, timeout]);
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -65,14 +85,22 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Faucet mint authority mismatch" }, { status: 500 });
       }
       const cap = token === "anthropic" ? FAUCET_ANTH_MAX : FAUCET_USDC_MAX;
-      const ata = await createAssociatedTokenAccountIdempotent(
-        connection,
-        admin,
-        mint,
-        wallet,
-      );
-      const existing = await getAccount(connection, ata);
-      const have = Number(existing.amount) / 10 ** mintInfo.decimals;
+      const ata = getAssociatedTokenAddressSync(mint, wallet, false, TOKEN_PROGRAM_ID);
+      let have = 0;
+      if (await connection.getAccountInfo(ata)) {
+        const existing = await getAccount(connection, ata);
+        have = Number(existing.amount) / 10 ** mintInfo.decimals;
+      } else {
+        tx.add(
+          createAssociatedTokenAccountIdempotentInstruction(
+            admin.publicKey,
+            ata,
+            wallet,
+            mint,
+            TOKEN_PROGRAM_ID,
+          ),
+        );
+      }
       const room = Math.max(0, cap - have);
       mintedUi = Math.min(mintedUi, room);
       mintAddr = mint.toBase58();
@@ -92,9 +120,7 @@ export async function POST(req: NextRequest) {
           cap,
         });
       }
-      tx.feePayer = admin.publicKey;
-      tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      const sig = await sendAndConfirmTransaction(connection, tx, [admin]);
+      const sig = await sendAndConfirm(connection, tx, [admin]);
       const account = await getAccount(connection, ata);
       balanceUi = Number(account.amount) / 10 ** mintInfo.decimals;
       return NextResponse.json({
@@ -121,9 +147,7 @@ export async function POST(req: NextRequest) {
         solBalance: solBefore / LAMPORTS_PER_SOL,
       });
     }
-    tx.feePayer = admin.publicKey;
-    tx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-    const sig = await sendAndConfirmTransaction(connection, tx, [admin]);
+    const sig = await sendAndConfirm(connection, tx, [admin]);
     return NextResponse.json({
       ok: true,
       sig,

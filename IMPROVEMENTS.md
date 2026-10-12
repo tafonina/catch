@@ -1,6 +1,6 @@
 # Catch — further improvements
 
-Hackathon build: fixed 30% / 40% LTV, posted `min(mark, TWAP)`, Stability Pool as the only liquidation path, full-debt close with surplus returned to the borrower.
+Hackathon build (v1.2): isolated market, yNFT bid book as the ceiling, kinked rate + scarcity split, partial liquidation that fills bids by price–time. Borrower health NFTs (Chad VC → Rekt) stay.
 
 This file is the post-hackathon map.
 
@@ -150,10 +150,10 @@ Lender APY then = borrow interest × utilization + idle yield × (1 − utilizat
 
 ## What ships today vs this file
 
-| | Now | Next |
+| | Now (v1.2) | Next |
 |---|---|---|
-| Borrow / liq LTV | 30% / 40% constants | Function of depth, SP coverage, oracle, vol |
-| Oracle | Posted min(mark, TWAP) | Pyth pull + TWAP, no test override |
-| Liquidation | SP or fail | SP → DEX ≤5% → auction → halt |
-| Close | Full debt + surplus | Trim to borrow LTV |
-| Idle USDC | Sits in vaults | Reserve + short yield + insurance fund |
+| Ceiling | Bid book only | Optional DEX depth term |
+| Liquidation | Partial fill of yNFTs, no DEX | Optional DEX residual + auction |
+| Rate | Kinked 10/15/30 + scarcity split | Fixed-term loans, notice period |
+| Borrower NFT | Chad VC health cards (kept) | Transferable position NFT |
+| Bids | One yNFT account per wallet (max 8) | Fungible tiers / curated vault |

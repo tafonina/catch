@@ -22,20 +22,24 @@ pub enum PreLendError {
     InvalidUsdcMint,
     #[msg("Borrowing is paused")]
     PoolPaused,
-    #[msg("New borrow would exceed the debt cap")]
+    #[msg("New borrow would exceed the bid-book ceiling")]
     DebtCapExceeded,
-    #[msg("Stability pool does not have enough USDC to cover the debt")]
+    #[msg("Bid book does not have enough unlocked USDC")]
     StabilityPoolInsufficient,
-    #[msg("No withdrawal has been requested")]
-    NoWithdrawalRequested,
-    #[msg("Withdrawal cooldown has not elapsed")]
-    CooldownNotElapsed,
-    #[msg("Stability pool still has unmigrated share deposits")]
-    StabilityPoolNeedsMigrate,
-    #[msg("Stability deposit is already migrated")]
-    AlreadyMigrated,
     #[msg("Position LTV is below the liquidation threshold")]
     PositionStillHealthy,
     #[msg("No surplus collateral to claim")]
     NoSurplusCollateral,
+    #[msg("Mark-vs-DEX spread is wider than the book's tightest bid")]
+    SpreadPause,
+    #[msg("This bid is engaged against open debt")]
+    BidEngaged,
+    #[msg("Bid book is full")]
+    BidBookFull,
+    #[msg("Discount does not match the existing bid")]
+    BidDiscountMismatch,
+    #[msg("Mint is not admitted (fee, permanent delegate, or missing book)")]
+    MintNotAdmitted,
+    #[msg("Bid accounts must be passed in price-time order")]
+    BidOrderInvalid,
 }

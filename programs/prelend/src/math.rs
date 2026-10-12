@@ -1,8 +1,8 @@
 use crate::constants::{BPS_DENOMINATOR, E18, SECONDS_PER_YEAR};
 use crate::error::PreLendError;
+use crate::risk::RiskParams;
 use anchor_lang::prelude::*;
 
-/// Convert a raw token amount into USDC base units (6 decimals) given a USD price with 6 decimals.
 pub fn collateral_value_usdc(amount: u64, decimals: u8, price_e6: u64) -> Result<u64> {
     let scale = 10u128
         .checked_pow(decimals as u32)
@@ -15,7 +15,6 @@ pub fn collateral_value_usdc(amount: u64, decimals: u8, price_e6: u64) -> Result
     u64::try_from(value).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// LTV in basis points: debt / collateral_value * 10_000.
 pub fn ltv_bps(debt_usdc: u64, collateral_value_usdc: u64) -> Result<u64> {
     require!(collateral_value_usdc > 0, PreLendError::MathOverflow);
     let bps = (debt_usdc as u128)
@@ -35,24 +34,6 @@ pub fn bps_of(amount: u64, bps: u16) -> Result<u64> {
     u64::try_from(value).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Simple interest: principal * rate_bps * elapsed / (10000 * seconds_per_year)
-pub fn accrued_interest(principal: u64, rate_bps: u16, elapsed_secs: i64) -> Result<u64> {
-    if principal == 0 || elapsed_secs <= 0 || rate_bps == 0 {
-        return Ok(0);
-    }
-    let interest = (principal as u128)
-        .checked_mul(rate_bps as u128)
-        .ok_or(PreLendError::MathOverflow)?
-        .checked_mul(elapsed_secs as u128)
-        .ok_or(PreLendError::MathOverflow)?
-        .checked_div((BPS_DENOMINATOR as u128).saturating_mul(SECONDS_PER_YEAR as u128))
-        .ok_or(PreLendError::MathOverflow)?;
-    u64::try_from(interest).map_err(|_| PreLendError::MathOverflow.into())
-}
-
-// ─── New index-based helpers ────────────────────────────────────────────────
-
-/// Actual outstanding debt = scaled_debt × borrow_index / 1e18.
 pub fn actual_debt(scaled_debt: u64, borrow_index_e18: u128) -> Result<u64> {
     if scaled_debt == 0 {
         return Ok(0);
@@ -65,8 +46,6 @@ pub fn actual_debt(scaled_debt: u64, borrow_index_e18: u128) -> Result<u64> {
     u64::try_from(debt).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Lender share mint: `amount * total_shares / pool_value`.
-/// First depositor (no shares or empty pool) receives 1:1 shares.
 pub fn shares_for_deposit(amount: u64, total_shares: u64, pool_value: u64) -> Result<u64> {
     if amount == 0 {
         return Ok(0);
@@ -82,7 +61,6 @@ pub fn shares_for_deposit(amount: u64, total_shares: u64, pool_value: u64) -> Re
     u64::try_from(shares).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Redeem value of `shares` against `pool_value / total_shares`.
 pub fn assets_from_shares(shares: u64, total_shares: u64, pool_value: u64) -> Result<u64> {
     if shares == 0 || total_shares == 0 {
         return Ok(0);
@@ -95,7 +73,6 @@ pub fn assets_from_shares(shares: u64, total_shares: u64, pool_value: u64) -> Re
     u64::try_from(assets).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Shares to burn for an `amount` withdrawal at the current exchange rate.
 pub fn shares_for_withdraw(amount: u64, total_shares: u64, pool_value: u64) -> Result<u64> {
     if amount == 0 || total_shares == 0 || pool_value == 0 {
         return Ok(0);
@@ -108,8 +85,6 @@ pub fn shares_for_withdraw(amount: u64, total_shares: u64, pool_value: u64) -> R
     u64::try_from(shares).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Convert a nominal USDC amount into index-scaled units.
-/// scaled = amount × 1e18 / borrow_index_e18.
 pub fn scaled_amount(amount: u64, borrow_index_e18: u128) -> Result<u64> {
     if amount == 0 {
         return Ok(0);
@@ -122,29 +97,31 @@ pub fn scaled_amount(amount: u64, borrow_index_e18: u128) -> Result<u64> {
     u64::try_from(scaled).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Collateral to seize during liquidation.
-/// seize = debt × (10000 + bonus_bps) × 10^decimals / (10000 × price_e6)
-pub fn seize_amount(debt: u64, bonus_bps: u16, price_e6: u64, decimals: u8) -> Result<u64> {
+/// Tokens bought with `usdc` at `mark * (1 - discount)`.
+pub fn tokens_at_discount(
+    usdc: u64,
+    discount_bps: u16,
+    price_e6: u64,
+    decimals: u8,
+) -> Result<u64> {
     require!(price_e6 > 0, PreLendError::MathOverflow);
+    let bid_price = (price_e6 as u128)
+        .checked_mul((BPS_DENOMINATOR - discount_bps as u64) as u128)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_div(BPS_DENOMINATOR as u128)
+        .ok_or(PreLendError::MathOverflow)?;
+    require!(bid_price > 0, PreLendError::MathOverflow);
     let scale = 10u128
         .checked_pow(decimals as u32)
         .ok_or(PreLendError::MathOverflow)?;
-    let numerator = (debt as u128)
-        .checked_mul((BPS_DENOMINATOR as u128) + (bonus_bps as u128))
-        .ok_or(PreLendError::MathOverflow)?
+    let tokens = (usdc as u128)
         .checked_mul(scale)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_div(bid_price)
         .ok_or(PreLendError::MathOverflow)?;
-    let denominator = (BPS_DENOMINATOR as u128)
-        .checked_mul(price_e6 as u128)
-        .ok_or(PreLendError::MathOverflow)?;
-    let seize = numerator
-        .checked_div(denominator)
-        .ok_or(PreLendError::MathOverflow)?;
-    u64::try_from(seize).map_err(|_| PreLendError::MathOverflow.into())
+    u64::try_from(tokens).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Validate oracle freshness and return the effective price = min(mark, twap).
-/// If `test_mode_price_e6 != 0` the test override is returned unconditionally.
 pub fn oracle_price_valid(
     mark_price_e6: u64,
     twap_price_e6: u64,
@@ -170,213 +147,188 @@ pub fn oracle_price_valid(
     Ok(std::cmp::min(mark_price_e6, twap_price_e6))
 }
 
-// ─── Stability pool product–sum (Liquity) ───────────────────────────────────
-
-/// Compounded USDC remaining after offsets since the depositor's snapshot.
-pub fn sp_compounded_usdc(
-    initial_usdc: u64,
-    snapshot_p_e18: u128,
-    snapshot_epoch: u64,
-    p_e18: u128,
-    epoch: u64,
-) -> Result<u64> {
-    if initial_usdc == 0 || snapshot_p_e18 == 0 {
+pub fn spread_bps(mark: u64, twap: u64) -> Result<u64> {
+    if mark == 0 {
         return Ok(0);
     }
-    if snapshot_epoch != epoch {
-        return Ok(0);
-    }
-    let value = (initial_usdc as u128)
-        .checked_mul(p_e18)
+    let hi = mark.max(twap);
+    let lo = mark.min(twap);
+    let bps = (hi.saturating_sub(lo) as u128)
+        .checked_mul(BPS_DENOMINATOR as u128)
         .ok_or(PreLendError::MathOverflow)?
-        .checked_div(snapshot_p_e18)
+        .checked_div(mark as u128)
+        .ok_or(PreLendError::MathOverflow)?;
+    u64::try_from(bps).map_err(|_| PreLendError::MathOverflow.into())
+}
+
+pub fn assert_spread_ok(mark: u64, twap: u64, min_discount_bps: u16, test_mode: u64) -> Result<()> {
+    if test_mode != 0 || min_discount_bps == 0 {
+        return Ok(());
+    }
+    require!(
+        spread_bps(mark, twap)? <= min_discount_bps as u64,
+        PreLendError::SpreadPause
+    );
+    Ok(())
+}
+
+/// Lower discount first, then earlier lock.
+pub fn bid_before(d1: u16, t1: i64, d2: u16, t2: i64) -> bool {
+    d1 < d2 || (d1 == d2 && t1 < t2)
+}
+
+pub fn borrow_rate_bps(u_senior_e18: u128, p: &RiskParams) -> Result<u16> {
+    let kink = (p.kink_util_bps as u128)
+        .checked_mul(E18)
+        .ok_or(PreLendError::MathOverflow)?
+        / BPS_DENOMINATOR as u128;
+    if u_senior_e18 <= kink {
+        if kink == 0 {
+            return Ok(p.base_rate_bps);
+        }
+        let span = (p.kink_rate_bps as u128).saturating_sub(p.base_rate_bps as u128);
+        let extra = u_senior_e18
+            .checked_mul(span)
+            .ok_or(PreLendError::MathOverflow)?
+            .checked_div(kink)
+            .ok_or(PreLendError::MathOverflow)?;
+        let rate = (p.base_rate_bps as u128).saturating_add(extra);
+        return u16::try_from(rate.min(u16::MAX as u128)).map_err(|_| PreLendError::MathOverflow.into());
+    }
+    let one = E18;
+    let above = u_senior_e18.min(one).saturating_sub(kink);
+    let den = one.saturating_sub(kink).max(1);
+    let span = (p.max_rate_bps as u128).saturating_sub(p.kink_rate_bps as u128);
+    let extra = above
+        .checked_mul(span)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_div(den)
+        .ok_or(PreLendError::MathOverflow)?;
+    let rate = (p.kink_rate_bps as u128).saturating_add(extra);
+    u16::try_from(rate.min(u16::MAX as u128)).map_err(|_| PreLendError::MathOverflow.into())
+}
+
+pub fn interest_headroom(debt: u64, rate_bps: u16, secs: i64) -> Result<u64> {
+    if debt == 0 || rate_bps == 0 || secs <= 0 {
+        return Ok(0);
+    }
+    let value = (debt as u128)
+        .checked_mul(rate_bps as u128)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_mul(secs as u128)
+        .ok_or(PreLendError::MathOverflow)?
+        .checked_div((BPS_DENOMINATOR as u128).saturating_mul(SECONDS_PER_YEAR as u128))
         .ok_or(PreLendError::MathOverflow)?;
     u64::try_from(value).map_err(|_| PreLendError::MathOverflow.into())
 }
 
-/// Collateral earned from liquidations after the depositor's snapshot (not including `pending`).
-pub fn sp_collateral_gain(
-    initial_usdc: u64,
-    snapshot_p_e18: u128,
-    snapshot_s_e18: u128,
-    snapshot_epoch: u64,
-    s_e18: u128,
-    epoch: u64,
-    prev_s_e18: u128,
-    prev_epoch: u64,
-) -> Result<u64> {
-    if initial_usdc == 0 || snapshot_p_e18 == 0 {
-        return Ok(0);
+/// Returns (reserve, senior, junior) cuts of `gross` interest.
+pub fn split_interest(gross: u64, d_active: u64, s_total: u64, j_total: u64, p: &RiskParams) -> Result<(u64, u64, u64)> {
+    if gross == 0 {
+        return Ok((0, 0, 0));
     }
-    let (s, matched) = if snapshot_epoch == epoch {
-        (s_e18, true)
-    } else if snapshot_epoch == prev_epoch {
-        (prev_s_e18, true)
-    } else {
-        (0, false)
-    };
-    if !matched || s <= snapshot_s_e18 {
-        return Ok(0);
+    let reserve = bps_of(gross, p.reserve_factor_bps)?;
+    let net = gross.saturating_sub(reserve);
+    if net == 0 || d_active == 0 {
+        return Ok((reserve, net, 0));
     }
-    let value = (initial_usdc as u128)
-        .checked_mul(s.saturating_sub(snapshot_s_e18))
+    let s = s_total.max(1);
+    let j = j_total.max(1);
+    let u_s = (d_active as u128).saturating_mul(E18) / s as u128;
+    let u_j = (d_active as u128).saturating_mul(E18) / j as u128;
+    let den = u_s.saturating_add(u_j).max(1);
+    let scarcity = (net as u128)
+        .checked_mul(u_s)
         .ok_or(PreLendError::MathOverflow)?
-        .checked_div(snapshot_p_e18)
+        .checked_div(den)
         .ok_or(PreLendError::MathOverflow)?;
-    u64::try_from(value).map_err(|_| PreLendError::MathOverflow.into())
+    let floor = bps_of(net, p.senior_floor_bps)?.min(net);
+    let senior = (scarcity as u64).max(floor).min(net);
+    let junior = net.saturating_sub(senior);
+    Ok((reserve, senior, junior))
 }
 
-/// Apply a liquidation offset: burn `debt` USDC from the pool and credit `seize` collateral to S.
-/// Returns the remaining snapshot-bucket USDC.
-pub fn sp_apply_offset(
-    total_usdc: u64,
-    p_e18: u128,
-    s_e18: u128,
-    epoch: u64,
+/// USDC to repay so remaining LTV ≤ target if collateral is sold at `discount`.
+pub fn repay_to_target(
     debt: u64,
-    seize: u64,
-) -> Result<(u64, u128, u128, u64, u128, u64)> {
-    require!(total_usdc > 0, PreLendError::StabilityPoolInsufficient);
-    require!(total_usdc >= debt, PreLendError::StabilityPoolInsufficient);
-    let p = if p_e18 == 0 { E18 } else { p_e18 };
-    let add_s = (seize as u128)
-        .checked_mul(p)
-        .ok_or(PreLendError::MathOverflow)?
-        .checked_div(total_usdc as u128)
-        .ok_or(PreLendError::MathOverflow)?;
-    let s_new = s_e18
-        .checked_add(add_s)
-        .ok_or(PreLendError::MathOverflow)?;
-    let remaining = total_usdc.saturating_sub(debt);
-    if remaining == 0 {
-        return Ok((0, E18, 0, epoch.saturating_add(1), s_new, epoch));
+    collat_value: u64,
+    target_ltv_bps: u16,
+    discount_bps: u16,
+) -> Result<u64> {
+    if collat_value == 0 {
+        return Ok(debt);
     }
-    let p_new = p
-        .checked_mul(remaining as u128)
+    let ltv = ltv_bps(debt, collat_value)?;
+    if ltv <= target_ltv_bps as u64 {
+        return Ok(0);
+    }
+    let t = target_ltv_bps as u128;
+    let live = (BPS_DENOMINATOR - discount_bps as u64) as u128;
+    // (D-R) / (C - R / live_frac) = T/10000
+    // D - T*C/10000 = R * (1 - T/(10000*live_frac))
+    let tc = (t.checked_mul(collat_value as u128).ok_or(PreLendError::MathOverflow)?)
+        / BPS_DENOMINATOR as u128;
+    let num = (debt as u128).saturating_sub(tc);
+    let t_over = t
+        .checked_mul(BPS_DENOMINATOR as u128)
         .ok_or(PreLendError::MathOverflow)?
-        .checked_div(total_usdc as u128)
-        .ok_or(PreLendError::MathOverflow)?;
-    let p_new = if p_new == 0 { 1 } else { p_new };
-    Ok((remaining, p_new, s_new, epoch, 0, 0))
+        / live.max(1);
+    let coeff_num = (BPS_DENOMINATOR as u128).saturating_sub(t_over.min(BPS_DENOMINATOR as u128));
+    if coeff_num == 0 {
+        return Ok(debt);
+    }
+    let repay = num
+        .checked_mul(BPS_DENOMINATOR as u128)
+        .ok_or(PreLendError::MathOverflow)?
+        / coeff_num;
+    Ok(u64::try_from(repay).unwrap_or(debt).min(debt))
 }
-
-// ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn values_one_whole_token() {
-        let value = collateral_value_usdc(1_000_000, 6, 100_000_000).unwrap();
-        assert_eq!(value, 100_000_000);
+    fn demo_params() -> RiskParams {
+        RiskParams {
+            max_borrow_ltv_bps: 3_000,
+            liquidation_ltv_bps: 4_000,
+            target_ltv_bps: 3_000,
+            base_rate_bps: 1_000,
+            kink_util_bps: 8_000,
+            kink_rate_bps: 1_500,
+            max_rate_bps: 3_000,
+            reserve_factor_bps: 1_000,
+            senior_floor_bps: 500,
+            interest_headroom_secs: 7 * 86_400,
+            price_staleness_secs: 300,
+            keeper_fee_usdc: 0,
+            dust_usdc: 1_000_000,
+            market_class: 0,
+        }
     }
 
     #[test]
-    fn fifty_percent_ltv_is_5000_bps() {
-        let value = collateral_value_usdc(2_000_000, 6, 100_000_000).unwrap();
-        let ltv = ltv_bps(100_000_000, value).unwrap();
-        assert_eq!(ltv, 5_000);
+    fn kink_at_eighty_is_fifteen() {
+        let p = demo_params();
+        let u = E18 * 8 / 10;
+        assert_eq!(borrow_rate_bps(u, &p).unwrap(), 1_500);
+        assert_eq!(borrow_rate_bps(E18, &p).unwrap(), 3_000);
     }
 
     #[test]
-    fn origination_fee() {
-        assert_eq!(bps_of(1_000_000, 50).unwrap(), 5_000);
+    fn spec_split_pre_spacex() {
+        let p = demo_params();
+        // 15% on $80k for a year = $12,000 gross
+        let (res, sen, jun) = split_interest(12_000_000_000, 80_000_000_000, 100_000_000_000, 300_000_000_000, &p).unwrap();
+        assert_eq!(res, 1_200_000_000);
+        assert!((sen as i64 - 8_100_000_000).abs() < 20_000_000);
+        assert!((jun as i64 - 2_700_000_000).abs() < 20_000_000);
     }
 
     #[test]
-    fn one_year_eight_percent() {
-        let interest = accrued_interest(1_000_000, 800, SECONDS_PER_YEAR as i64).unwrap();
-        assert_eq!(interest, 80_000);
-    }
-
-    #[test]
-    fn scaled_debt_roundtrip() {
-        let index = E18;
-        let amount = 1_000_000u64;
-        let scaled = scaled_amount(amount, index).unwrap();
-        assert_eq!(scaled, amount);
-        let actual = actual_debt(scaled, index).unwrap();
-        assert_eq!(actual, amount);
-    }
-
-    #[test]
-    fn actual_debt_with_accrued_interest() {
-        let index = E18 + E18 / 10; // 1.1e18 → 10 % accrued
-        let scaled = 1_000_000u64;
-        let actual = actual_debt(scaled, index).unwrap();
-        assert_eq!(actual, 1_100_000);
-    }
-
-    #[test]
-    fn seize_with_ten_pct_bonus() {
-        // debt 100 USDC, price $10, 6 dec, 10 % bonus → 11 tokens
-        let seize = seize_amount(100_000_000, 1_000, 10_000_000, 6).unwrap();
-        assert_eq!(seize, 11_000_000);
-    }
-
-    #[test]
-    fn oracle_test_mode_override() {
-        let price = oracle_price_valid(0, 0, 0, 0, 100, 300, 42_000_000).unwrap();
-        assert_eq!(price, 42_000_000);
-    }
-
-    #[test]
-    fn oracle_returns_min() {
-        let price =
-            oracle_price_valid(50_000_000, 40_000_000, 100, 100, 100, 300, 0).unwrap();
-        assert_eq!(price, 40_000_000);
-    }
-
-    #[test]
-    fn first_lender_is_one_to_one() {
-        assert_eq!(shares_for_deposit(5_000_000, 0, 0).unwrap(), 5_000_000);
-    }
-
-    #[test]
-    fn later_lender_pays_accrued_rate() {
-        // Pool is $110 of assets on 100 shares after interest lands.
-        let shares = shares_for_deposit(11_000_000, 100_000_000, 110_000_000).unwrap();
-        assert_eq!(shares, 10_000_000);
-        assert_eq!(
-            assets_from_shares(100_000_000, 110_000_000, 121_000_000).unwrap(),
-            110_000_000
-        );
-    }
-
-    #[test]
-    fn sp_offset_splits_collateral_only_to_incumbents() {
-        // $30k in pool, $5k depositor (1/6). Offset $29,798, seize 53.89e9 atoms.
-        let total = 30_000_000_000u64;
-        let (remaining, p, s, epoch, prev_s, prev_epoch) =
-            sp_apply_offset(total, E18, 0, 0, 29_798_010_000, 53_893_698_409).unwrap();
-        assert_eq!(remaining, 201_990_000);
-        assert_eq!(epoch, 0);
-        assert_eq!(prev_s, 0);
-        assert_eq!(prev_epoch, 0);
-        let five_k = 5_000_000_000u64;
-        let left = sp_compounded_usdc(five_k, E18, 0, p, epoch).unwrap();
-        let gain = sp_collateral_gain(five_k, E18, 0, 0, s, epoch, prev_s, prev_epoch).unwrap();
-        assert!((left as i64 - 33_665_000).abs() < 2_000);
-        assert!((gain as i64 - 8_982_283_068).abs() < 5_000);
-        // Late $100 deposit is a new initial at current P/S — no past gain.
-        let late = sp_collateral_gain(100_000_000, p, s, epoch, s, epoch, prev_s, prev_epoch).unwrap();
-        assert_eq!(late, 0);
-    }
-
-    #[test]
-    fn sp_empty_pool_wipes_usdc_keeps_gain_on_prev_s() {
-        let (remaining, p, s, epoch, prev_s, prev_epoch) =
-            sp_apply_offset(1_000_000, E18, 0, 0, 1_000_000, 50).unwrap();
-        assert_eq!(remaining, 0);
-        assert_eq!(p, E18);
-        assert_eq!(s, 0);
-        assert_eq!(epoch, 1);
-        let gain = sp_collateral_gain(1_000_000, E18, 0, 0, s, epoch, prev_s, prev_epoch).unwrap();
-        assert_eq!(gain, 50);
-        assert_eq!(
-            sp_compounded_usdc(1_000_000, E18, 0, p, epoch).unwrap(),
-            0
-        );
+    fn tokens_ten_pct_discount() {
+        // $4,000 at $1,000 mark, 10% → $900/token → 4.444… tokens (6 dec)
+        let t = tokens_at_discount(4_000_000_000, 1_000, 1_000_000_000, 6).unwrap();
+        assert_eq!(t, 4_444_444);
     }
 }

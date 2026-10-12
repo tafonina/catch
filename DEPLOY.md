@@ -12,7 +12,7 @@ In `app/.env.local`:
 
 ```
 NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
-NEXT_PUBLIC_PRELEND_PROGRAM_ID=HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd
+NEXT_PUBLIC_PRELEND_PROGRAM_ID=5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY
 ```
 
 Point Phantom at **Devnet**. Restart `npm run dev`.
@@ -29,7 +29,7 @@ NO_DNA=1 anchor build
 NO_DNA=1 anchor deploy
 ```
 
-Program id is `HujDemHxNw2y7qJSDrgE1eYhVS8SGTvQL55oweQfNQfd`. `[provider] cluster` in `Anchor.toml` is `devnet`.
+Program id is `5gcsfFaJWpRxnCAsms297U8XxqjnrrM5sWZ7552biuGY`. `[provider] cluster` in `Anchor.toml` is `devnet`.
 
 Then seed the vault (mock USDC + `initialize_pool` + deposit):
 
