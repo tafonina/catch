@@ -52,7 +52,7 @@ function concat(...parts: Uint8Array[]) {
     out.set(part, o);
     o += part.length;
   }
-  return out;
+  return Buffer.from(out);
 }
 
 function borshString(value: string) {
@@ -137,7 +137,7 @@ function burnNftIx(params: {
       { pubkey: params.edition, isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
-    data: new Uint8Array([29]),
+    data: Buffer.from([29]),
   });
 }
 

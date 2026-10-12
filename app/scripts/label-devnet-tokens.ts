@@ -55,7 +55,7 @@ function concat(...parts: Uint8Array[]) {
     out.set(part, o);
     o += part.length;
   }
-  return out;
+  return Buffer.from(out);
 }
 
 function createMetadataIx(params: {
