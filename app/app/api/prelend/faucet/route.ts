@@ -44,13 +44,17 @@ async function handleFaucet(req: NextRequest) {
   const admin = loadServerKeypair();
   const tx = new Transaction();
   const solBefore = await connection.getBalance(wallet);
-  const solGap = Math.max(0, SOL_TOPUP - solBefore);
-  if (solGap > 0) {
+  const requestedSol = Number(body.amount);
+  const explicitSol = token === "sol" && Number.isFinite(requestedSol) && requestedSol > 0;
+  const solLamports = explicitSol
+    ? Math.round(Math.min(requestedSol, 1) * LAMPORTS_PER_SOL)
+    : Math.max(0, SOL_TOPUP - solBefore);
+  if (solLamports > 0) {
     tx.add(
       SystemProgram.transfer({
         fromPubkey: admin.publicKey,
         toPubkey: wallet,
-        lamports: solGap,
+        lamports: solLamports,
       }),
     );
   }
@@ -126,11 +130,11 @@ async function handleFaucet(req: NextRequest) {
       mint: mintAddr,
       cap,
       skipped: mintedUi === 0,
-      solSent: solGap / LAMPORTS_PER_SOL,
+      solSent: solLamports / LAMPORTS_PER_SOL,
     });
   }
 
-  if (solGap === 0) {
+  if (solLamports === 0) {
     return NextResponse.json({
       ok: true,
       skipped: true,
@@ -146,7 +150,7 @@ async function handleFaucet(req: NextRequest) {
     sig,
     token: "sol",
     wallet: wallet.toBase58(),
-    solSent: solGap / LAMPORTS_PER_SOL,
+    solSent: solLamports / LAMPORTS_PER_SOL,
   });
 }
 

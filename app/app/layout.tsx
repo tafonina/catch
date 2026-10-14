@@ -1,19 +1,32 @@
 import type { Metadata } from "next";
-import { Providers } from "./providers";
+import { Instrument_Serif, Manrope } from "next/font/google";
 import "./globals.css";
 
+const sans = Manrope({
+  subsets: ["latin"],
+  variable: "--font-sans",
+});
+
+const serif = Instrument_Serif({
+  subsets: ["latin"],
+  weight: "400",
+  style: ["normal", "italic"],
+  variable: "--font-serif",
+});
+
 export const metadata: Metadata = {
-  title: "Catch — Borrow USDC against PreStocks",
+  title: {
+    default: "Catch — Borrow against tokens nobody else will lend on",
+    template: "%s",
+  },
   description:
-    "Over-collateralized lending for tokenized pre-IPO stocks on Solana. Credit is capped by locked bids.",
+    "Credit against pre-IPO and long-tail tokens on Solana, capped by committed exit liquidity.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="antialiased">
-        <Providers>{children}</Providers>
-      </body>
+    <html lang="en" className={`${sans.variable} ${serif.variable}`}>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

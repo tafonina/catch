@@ -18,7 +18,7 @@ function readPool() {
   };
 }
 
-export default function Page() {
+export default function AppPage() {
   const [pool, setPool] = useState<string | null>(null);
   const [tab, setTab] = useState<MarketTab>("lend");
   const [ready, setReady] = useState(false);

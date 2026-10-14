@@ -1,14 +1,13 @@
 "use client";
 
 import { useWallet } from "@solana/wallet-adapter-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
-import { signerKey } from "@/lib/active-wallet";
 import { PriceQuote, tokenLabel } from "@/components/PriceQuote";
 import { WalletConnect } from "@/components/WalletConnect";
 import { LIQUIDATION_LTV, MAX_BORROW_LTV, formatAprPct, marketYields } from "@/lib/loan";
 import {
   ISOLATED_MARKETS,
-  liveMarket,
   type IsolatedMarket,
   type MarketTab,
 } from "@/lib/markets";
@@ -53,7 +52,7 @@ export function Markets({
 
   useEffect(() => {
     let stop = false;
-    const wallet = signerKey(publicKey)?.toBase58();
+    const wallet = publicKey?.toBase58();
     const q = wallet ? `?wallet=${wallet}` : "";
     void fetch(`/api/prelend/vault${q}`)
       .then((res) => res.json())
@@ -85,7 +84,6 @@ export function Markets({
     };
   }, []);
 
-  const live = liveMarket();
   const supply = vault?.poolValueUi ?? 0;
   const borrowed = vault?.totalBorrowedUi ?? 0;
   const available = vault?.uiAmount ?? 0;
@@ -99,33 +97,47 @@ export function Markets({
     <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <img
-            src="/catch-mark.svg"
-            alt="Catch"
-            className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
-          />
+          <Link href="/" className="shrink-0">
+            <img
+              src="/catch-mark.svg"
+              alt=""
+              className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
+            />
+          </Link>
           <div>
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Catch</h1>
+            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+              <Link href="/" className="hover:text-amber-200">
+                Catch
+              </Link>
+            </h1>
             <p className="mt-1 max-w-xl text-sm text-slate-400">
               Isolated markets. Credit is capped by the bid book in that pool only.
             </p>
+            <div className="mt-2 flex gap-4 text-xs">
+              <Link href="/" className="text-slate-500 hover:text-amber-200">
+                ← Landing
+              </Link>
+              <Link href="/docs" className="text-slate-500 hover:text-amber-200">
+                How it works
+              </Link>
+            </div>
           </div>
         </div>
         <WalletConnect
           usdc={usdc}
           anthropic={anth}
           onChanged={() => {
-            void fetch("/api/prelend/vault")
+            const wallet = publicKey?.toBase58();
+            const q = wallet ? `?wallet=${wallet}` : "";
+            void fetch(`/api/prelend/vault${q}`)
               .then((res) => res.json())
-              .then((data: VaultSnap) => setVault(data))
+              .then((data: VaultSnap) => {
+                setVault(data);
+                if (typeof data.usdcWalletUi === "number") setUsdc(data.usdcWalletUi);
+                if (typeof data.collateralWalletUi === "number") setAnth(data.collateralWalletUi);
+              })
               .catch(() => undefined);
           }}
-          onRole={(next) =>
-            onOpen(
-              live.id,
-              next === "borrower" ? "borrow" : next === "bidder" ? "stability" : "lend",
-            )
-          }
         />
       </header>
 
