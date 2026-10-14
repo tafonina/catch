@@ -3,8 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { PublicKey, type Keypair, type Transaction } from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import { PublicKey, Transaction, type Keypair } from "@solana/web3.js";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   LIQUIDATION_LTV,
@@ -33,13 +38,7 @@ import {
   buildWithdrawStabilityTx,
   buildWithdrawTx,
 } from "@/lib/prelend-actions";
-import {
-  phantomInjected,
-  reconnectTrustedPhantom,
-  signerKey,
-  walletIntent,
-} from "@/lib/active-wallet";
-import { sendWithPhantom } from "@/lib/wallet-send";
+import { sendWithWallet } from "@/lib/wallet-send";
 import {
   buildBurnLoanNftTx,
   buildMintLoanNftTx,
@@ -50,12 +49,13 @@ import {
   writeStoredNft,
 } from "@/lib/loan-nft";
 import { explorerAccount } from "@/lib/cluster";
-import { isDemoWalletActive } from "@/lib/demo-wallets";
 import { MOCK_ANTHROPIC, positionPda } from "@/lib/prelend";
 import { PriceQuote, tokenLabel } from "@/components/PriceQuote";
 import { WalletConnect } from "@/components/WalletConnect";
 import { MarketDetails } from "@/components/MarketDetails";
 import { recordMarketSnapshot } from "@/lib/market-history";
+
+const USDC_TEST_ADMIN = new PublicKey("FZWtz3onpdCDEyKrR8GRYLNNi2PnU83Xk3EoEu9wAsZo");
 
 function formatUsd(n: number | null | undefined, digits = 2) {
   if (n == null || Number.isNaN(Number(n))) return "—";
@@ -89,7 +89,7 @@ export function Dashboard({
   onBack?: () => void;
 }) {
   const { connection } = useConnection();
-  const { publicKey, connected, signTransaction } = useWallet();
+  const { publicKey, signTransaction } = useWallet();
   const [stocks, setStocks] = useState<PreStock[]>([]);
   const listed = ISOLATED_MARKETS.find((m) => m.id === marketId) ?? ISOLATED_MARKETS[0];
   const [symbol, setSymbol] = useState(listed.base);
@@ -136,28 +136,13 @@ export function Dashboard({
   const vaultFetch = useRef(0);
 
   useEffect(() => {
-    const load = () => {
-      fetchPre();
-      void fetchVault();
-    };
-    void reconnectTrustedPhantom().then(load);
-    const id = setInterval(load, 45_000);
-    const phantom = phantomInjected();
-    phantom?.on?.("connect", load);
-    phantom?.on?.("accountChanged", load);
-    phantom?.on?.("disconnect", load);
-    window.addEventListener("prelend-wallet", load);
-    return () => {
-      clearInterval(id);
-      phantom?.off?.("connect", load);
-      phantom?.off?.("accountChanged", load);
-      phantom?.off?.("disconnect", load);
-      window.removeEventListener("prelend-wallet", load);
-    };
-  }, []);
-
-  useEffect(() => {
+    void fetchPre();
     void fetchVault();
+    const id = window.setInterval(() => {
+      void fetchPre();
+      void fetchVault();
+    }, 45_000);
+    return () => window.clearInterval(id);
   }, [publicKey]);
 
   useEffect(() => {
@@ -179,7 +164,7 @@ export function Dashboard({
   }
 
   function activeKey() {
-    return signerKey(publicKey);
+    return publicKey;
   }
 
   function poolCollateralMint() {
@@ -193,14 +178,7 @@ export function Dashboard({
   }
 
   async function fetchVault() {
-    let key = activeKey();
-    if (!key && walletIntent() === "connected") {
-      setUserReady(false);
-      for (let i = 0; i < 20 && !key; i += 1) {
-        await new Promise((r) => window.setTimeout(r, 50));
-        key = activeKey();
-      }
-    }
+    const key = activeKey();
     const gen = ++vaultFetch.current;
     const expected = key?.toBase58() ?? null;
     if (expected) {
@@ -327,13 +305,12 @@ export function Dashboard({
   }
 
   async function signSend(tx: Transaction, extraSigners?: Keypair[]) {
-    await sendWithPhantom({
+    if (!publicKey || !signTransaction) throw new Error("Connect wallet");
+    await sendWithWallet({
       connection,
       tx,
       extraSigners,
-      signTransaction: signTransaction
-        ? async (next) => (await signTransaction(next)) as typeof next
-        : undefined,
+      signTransaction: async (next) => (await signTransaction(next)) as typeof next,
     });
   }
 
@@ -590,6 +567,29 @@ export function Dashboard({
     }
   }
 
+  async function sendOneUsdc() {
+    const key = activeKey();
+    if (!key) return ping("Connect wallet");
+    if (!vaultMint) return ping("Pool unavailable");
+    setBusy("usdc1");
+    try {
+      const mint = new PublicKey(vaultMint);
+      const from = getAssociatedTokenAddressSync(mint, key, false, TOKEN_PROGRAM_ID);
+      const to = getAssociatedTokenAddressSync(mint, USDC_TEST_ADMIN, false, TOKEN_PROGRAM_ID);
+      const tx = new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(key, to, USDC_TEST_ADMIN, mint, TOKEN_PROGRAM_ID),
+        createTransferInstruction(from, to, key, 1_000_000n, [], TOKEN_PROGRAM_ID),
+      );
+      tx.feePayer = key;
+      await signSend(tx);
+      ping("Sent 1 USDC");
+    } catch (err) {
+      fail(err, "USDC transfer failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function resetOracle() {
     const key = activeKey();
     if (!key) return ping("Connect wallet");
@@ -816,9 +816,6 @@ export function Dashboard({
           usdc={usdcWallet}
           anthropic={collWallet}
           onChanged={() => void fetchVault()}
-          onRole={(next) =>
-            setTab(next === "borrower" ? "borrow" : next === "bidder" ? "stability" : "lend")
-          }
         />
       </header>
 
@@ -1217,6 +1214,13 @@ export function Dashboard({
                 className="rounded-xl border border-slate-500 px-4 py-2 font-semibold text-slate-200 disabled:opacity-50"
               >
                 Reset oracle
+              </button>
+              <button
+                onClick={() => void sendOneUsdc()}
+                disabled={busy !== null}
+                className="rounded-xl border border-slate-500 px-4 py-2 font-semibold text-slate-200 disabled:opacity-50"
+              >
+                Send 1 USDC
               </button>
               <button
                 onClick={() => void warpOneMonth()}

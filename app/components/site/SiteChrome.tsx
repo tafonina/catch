@@ -3,9 +3,11 @@ import Link from "next/link";
 export function SiteChrome({
   children,
   active,
+  edition,
 }: {
   children: React.ReactNode;
   active?: "home" | "docs";
+  edition?: "classic";
 }) {
   return (
     <div className="min-h-screen">
@@ -40,6 +42,15 @@ export function SiteChrome({
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-5 py-8 text-sm text-slate-500 sm:px-6">
           <div>Catch · devnet · not offered to US persons</div>
           <div className="flex gap-5">
+            {edition === "classic" ? (
+              <Link href="/" className="hover:text-slate-200">
+                Newer landing
+              </Link>
+            ) : active === "home" ? (
+              <Link href="/classic" className="hover:text-slate-200">
+                Earlier landing
+              </Link>
+            ) : null}
             <Link href="/docs" className="hover:text-slate-200">
               Docs
             </Link>

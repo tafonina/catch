@@ -3,13 +3,11 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { signerKey } from "@/lib/active-wallet";
 import { PriceQuote, tokenLabel } from "@/components/PriceQuote";
 import { WalletConnect } from "@/components/WalletConnect";
 import { LIQUIDATION_LTV, MAX_BORROW_LTV, formatAprPct, marketYields } from "@/lib/loan";
 import {
   ISOLATED_MARKETS,
-  liveMarket,
   type IsolatedMarket,
   type MarketTab,
 } from "@/lib/markets";
@@ -54,7 +52,7 @@ export function Markets({
 
   useEffect(() => {
     let stop = false;
-    const wallet = signerKey(publicKey)?.toBase58();
+    const wallet = publicKey?.toBase58();
     const q = wallet ? `?wallet=${wallet}` : "";
     void fetch(`/api/prelend/vault${q}`)
       .then((res) => res.json())
@@ -86,7 +84,6 @@ export function Markets({
     };
   }, []);
 
-  const live = liveMarket();
   const supply = vault?.poolValueUi ?? 0;
   const borrowed = vault?.totalBorrowedUi ?? 0;
   const available = vault?.uiAmount ?? 0;
@@ -130,17 +127,17 @@ export function Markets({
           usdc={usdc}
           anthropic={anth}
           onChanged={() => {
-            void fetch("/api/prelend/vault")
+            const wallet = publicKey?.toBase58();
+            const q = wallet ? `?wallet=${wallet}` : "";
+            void fetch(`/api/prelend/vault${q}`)
               .then((res) => res.json())
-              .then((data: VaultSnap) => setVault(data))
+              .then((data: VaultSnap) => {
+                setVault(data);
+                if (typeof data.usdcWalletUi === "number") setUsdc(data.usdcWalletUi);
+                if (typeof data.collateralWalletUi === "number") setAnth(data.collateralWalletUi);
+              })
               .catch(() => undefined);
           }}
-          onRole={(next) =>
-            onOpen(
-              live.id,
-              next === "borrower" ? "borrow" : next === "bidder" ? "stability" : "lend",
-            )
-          }
         />
       </header>
 

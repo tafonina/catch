@@ -1,202 +1,221 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { FlowFilm } from "@/components/site/FlowFilm";
 import { SiteChrome } from "@/components/site/SiteChrome";
+import { HeroLoan } from "@/components/site/v2/HeroLoan";
+import { CountUp, Reveal } from "@/components/site/v2/motion";
+import { RateModel } from "@/components/site/v2/RateModel";
+import { BidderAnim, BorrowerAnim, LenderAnim } from "@/components/site/v2/RoleAnims";
+import "@/components/site/v2/landing.css";
 
 export const metadata: Metadata = {
-  title: "Catch — Borrow against tokens nobody else will lend on",
+  title: "Catch — Credit against low-liquidity tokens",
   description:
-    "Credit against pre-IPO and long-tail tokens on Solana. Every loan is capped by USDC bidders have already locked.",
+    "Catch unlocks credit against low-liquidity tokens on Solana, secured by committed exit liquidity: USDC that bidders lock to buy the collateral at their own price.",
 };
-
-const roles = [
-  {
-    n: "01",
-    name: "Borrower",
-    line: "Puts in the token. Gets USDC, without selling.",
-    body: "Lock a pre-IPO token and draw USDC up to 30% of its value, and only up to the cash already waiting in the book. If the loan crosses 40% LTV, a partial liquidation brings it back to 30%.",
-  },
-  {
-    n: "02",
-    name: "Lender",
-    line: "Puts in USDC. Gets yield, repaid in USDC.",
-    body: "Deposits are lent out. Interest follows a kink: 10% when the vault is idle, 15% at 80% used, 30% when it is full. Lenders keep a floor, and they are repaid in USDC.",
-  },
-  {
-    n: "03",
-    name: "Bidder",
-    line: "The stability pool. USDC at a discount, ready to buy.",
-    body: "A bid is escrow, not a deposit that gets lent. Choose the discount. While that cash backs open debt it earns lock yield. If a loan is liquidated, you buy the collateral at your price.",
-  },
-];
 
 const steps = [
   {
-    t: "The book is the ceiling",
-    d: "Market debt cannot exceed the USDC locked in bids. An empty book means the ceiling is zero.",
+    t: "Bidders commit",
+    d: "They lock USDC to buy the token at their own discount. “I’ll buy at 10% below market.”",
   },
   {
-    t: "Two limits, the smaller one binds",
-    d: "A position can borrow 30% of collateral. The market can borrow only what the book can buy.",
+    t: "Holders borrow",
+    d: "USDC against the token, without selling it. Each loan is sized to the bids behind it.",
   },
   {
-    t: "A break is a fill",
-    d: "At 40% LTV the book buys just enough collateral to restore 30%. Tightest discount first, then the earliest bid.",
+    t: "A bad loan is caught",
+    d: "Bidders buy just enough collateral at their price. Lenders are repaid in USDC. Nothing is dumped on a DEX.",
+  },
+];
+
+const roles = [
+  {
+    id: "borrower",
+    tag: "Borrower",
+    title: "Cash without selling your token.",
+    perks: [
+      "Borrow USDC against a pre-IPO token today.",
+      "Keep the upside. Repay and the token is back in your wallet.",
+      "If the price falls, only part is sold, to bidders. Never into a thin DEX pool.",
+    ],
+    cta: { href: "/app?pool=anthropic&tab=borrow", label: "Borrow" },
+    Anim: BorrowerAnim,
+  },
+  {
+    id: "lender",
+    tag: "Lender",
+    title: "Yield, repaid in USDC.",
+    perks: [
+      "Earn interest on USDC lent to holders of scarce tokens.",
+      "Paid back in USDC. You never end up holding the token.",
+      "Bidders’ cash stands in front of you, then the market reserve.",
+    ],
+    cta: { href: "/app?pool=anthropic&tab=lend", label: "Lend" },
+    Anim: LenderAnim,
+  },
+  {
+    id: "bidder",
+    tag: "Bidder",
+    title: "Buy the token at your price, and get paid while you wait.",
+    perks: [
+      "Missed the allocation? Name the discount you would buy at.",
+      "Earn yield while your bid is backing a loan.",
+      "Your cash is never lent out. Unused bids withdraw any time.",
+    ],
+    cta: { href: "/app?pool=anthropic&tab=stability", label: "Place a bid" },
+    Anim: BidderAnim,
   },
 ];
 
 export default function LandingPage() {
   return (
     <SiteChrome active="home">
-      <main>
-        <section className="mx-auto grid max-w-6xl items-end gap-14 px-5 pb-8 pt-16 sm:px-6 sm:pt-24 lg:grid-cols-[1.15fr_0.85fr] lg:pb-16">
-          <div>
-            <p className="mono text-[11px] uppercase tracking-[0.28em] text-[#d4af37]">
-              Solana · isolated markets
-            </p>
-            <h1 className="mt-5 max-w-xl text-5xl leading-[0.95] tracking-tight sm:text-7xl">
-              Borrow against tokens{" "}
-              <span className="serif italic text-[#e7c96a]">nobody else</span> will lend on.
+      <main className="lx">
+        <section className="lx-hero">
+          <Reveal>
+            <p className="lx-kicker">Pre-IPO and long-tail tokens · Solana</p>
+            <h1>
+              Catch unlocks credit against low{"\u2011"}liquidity tokens,
+              <em> secured by committed exit liquidity.</em>
             </h1>
-            <p className="mt-6 max-w-lg text-lg leading-relaxed text-slate-300">
-              Pre-IPO tokens trade on Solana with a mark, and almost no exit. Catch lends against
-              them because bidders have already locked the USDC to buy them.
+            <p className="lx-lead">
+              Bidders lock USDC to buy the token at a price they choose. That is what makes a loan
+              safe to give: holders borrow without selling, and lenders are repaid in USDC.
             </p>
-            <div className="mt-8 flex flex-wrap items-center gap-4">
-              <Link
-                href="/app"
-                className="rounded-full bg-[#d4af37] px-6 py-3 text-sm font-semibold text-black transition hover:bg-[#e3c25a]"
-              >
+            <div className="lx-cta">
+              <Link href="/app?pool=anthropic" className="lx-btn">
                 Open the app
               </Link>
-              <Link href="/docs" className="text-sm text-slate-300 underline-offset-4 hover:text-white hover:underline">
-                How the market works
-              </Link>
+              <a href="#roles" className="lx-textlink">
+                What each side gets ↓
+              </a>
             </div>
-          </div>
-
-          <aside className="panel rounded-3xl p-6 sm:p-8">
-            <div className="flex items-center justify-between gap-3">
-              <div className="mono text-[11px] uppercase tracking-[0.22em] text-[#d4af37]">
-                Stability pool
-              </div>
-              <div className="text-[11px] text-emerald-300">USDC / ANTHROPIC · devnet</div>
-            </div>
-            <p className="serif mt-4 text-3xl leading-tight italic text-white">
-              Buyers commit before the loan.
-            </p>
-            <p className="mt-4 text-sm leading-relaxed text-slate-300">
-              Holders borrow against a low-liquidity token because bidders have already locked USDC
-              to purchase the collateral if the loan has to be closed. The holder keeps the token.
-              The lender is repaid in USDC. Every loan is secured by that committed exit.
-            </p>
-            <Link
-              href="/app?pool=anthropic"
-              className="mt-6 inline-flex text-sm font-semibold text-[#e7c96a] hover:text-white"
-            >
-              Enter the Anthropic market →
-            </Link>
-          </aside>
+          </Reveal>
+          <Reveal delay={150}>
+            <HeroLoan />
+          </Reveal>
         </section>
 
-        <section className="mx-auto max-w-6xl px-5 py-20 sm:px-6">
-          <p className="mono text-[11px] uppercase tracking-[0.28em] text-slate-500">The gap</p>
-          <h2 className="mt-4 max-w-3xl text-3xl leading-tight tracking-tight sm:text-5xl">
-            Liquidity too thin to borrow against.
-          </h2>
-          <p className="mt-6 max-w-2xl text-lg leading-relaxed text-slate-300">
-            Long-tail and private-market tokens have onchain liquidity too thin for a normal loan.
-            A liquidation into that book becomes bad debt. Lenders stay away, and holders sit on
-            dead capital.
-          </p>
-        </section>
-
-        <section className="border-y border-white/10 bg-black/20">
-          <div className="mx-auto max-w-6xl px-5 py-20 sm:px-6">
-            <p className="mono text-[11px] uppercase tracking-[0.28em] text-slate-500">
-              Three sides, one market
-            </p>
-            <div className="mt-10 divide-y divide-white/10">
-              {roles.map((role) => (
-                <article key={role.n} className="grid gap-4 py-8 sm:grid-cols-[7rem_1fr_1.2fr] sm:gap-8">
-                  <div className="serif text-2xl italic text-[#d4af37]">{role.n}</div>
-                  <div>
-                    <h3 className="text-2xl font-semibold">{role.name}</h3>
-                    <p className="mt-2 text-sm text-slate-400">{role.line}</p>
-                  </div>
-                  <p className="leading-relaxed text-slate-300">{role.body}</p>
-                </article>
-              ))}
-            </div>
-          </div>
-        </section>
-
-        <section className="mx-auto max-w-6xl px-5 py-20 sm:px-6">
-          <div className="max-w-2xl">
-            <p className="mono text-[11px] uppercase tracking-[0.28em] text-[#d4af37]">
-              Interest, yield and revenue
-            </p>
-            <h2 className="mt-4 text-3xl leading-tight tracking-tight sm:text-5xl">
-              Interest flows to the <span className="serif italic text-[#e7c96a]">scarcer side.</span>
+        <section id="problem" className="lx-block">
+          <Reveal>
+            <p className="lx-kicker">The problem</p>
+            <h2>
+              Valuable tokens. <em>Almost no exit.</em>
             </h2>
-            <p className="mt-5 text-lg leading-relaxed text-slate-300">
-              Rates rise as the senior vault fills. After the reserve takes its cut, what remains
-              leans toward lenders or bidders — whichever the market is short of — so both sides
-              keep a reason to show up.
+            <p className="lx-prose">
+              Need cash but hold Anthropic stock? Today you have to sell. Solana’s big lending markets
+              take only public stocks, because one liquidation into a thin pool would crash the price
+              and leave bad debt.
             </p>
-          </div>
-          <div className="mt-10 overflow-hidden rounded-3xl border border-[rgba(212,175,55,0.28)] shadow-[0_40px_120px_rgba(0,0,0,0.45)]">
-            <FlowFilm />
-          </div>
-          <p className="mt-4 max-w-3xl text-sm leading-relaxed text-slate-500">
-            Borrow rate: 10% at an empty vault, 15% at the 80% kink, 30% when lenders are fully
-            used. Ten percent of interest fills that market’s reserve. Lenders keep at least a 5%
-            floor of the rest. Lock yield is paid only on bids that are actually covering debt.
-          </p>
+          </Reveal>
+          <ul className="lx-stats">
+            <Reveal as="li">
+              <b>
+                <CountUp to={1500} suffix="+" />
+              </b>
+              <span>private unicorns, about $6 trillion, stay illiquid until an IPO</span>
+            </Reveal>
+            <Reveal as="li" delay={120}>
+              <b>
+                <CountUp to={78} prefix="~" suffix="%" />
+              </b>
+              <span>of pre-IPO token volume already trades on Solana</span>
+            </Reveal>
+            <Reveal as="li" delay={240}>
+              <b>
+                <CountUp to={3} prefix="~" suffix="%" />
+              </b>
+              <span>of an $8M Anthropic token can be sold on a DEX ($236k of liquidity)</span>
+            </Reveal>
+          </ul>
         </section>
 
-        <section className="mx-auto grid max-w-6xl gap-12 px-5 py-8 sm:px-6 lg:grid-cols-[0.8fr_1.2fr] lg:py-16">
-          <div>
-            <p className="mono text-[11px] uppercase tracking-[0.28em] text-slate-500">
-              When a loan breaks
-            </p>
-            <h2 className="mt-4 text-3xl leading-tight tracking-tight sm:text-4xl">
-              The buyer is already in the pool.
+        <section id="how" className="lx-block">
+          <Reveal>
+            <p className="lx-kicker">How it works</p>
+            <h2>
+              The buyer is lined up <em>before the loan.</em>
             </h2>
-            <p className="mt-4 leading-relaxed text-slate-300">
-              Senior is repaid in USDC. Each bidder receives tokens at the discount they chose.
-              The sale settles in the book, so it does not push the DEX price down.
-            </p>
-          </div>
-          <ol className="space-y-4">
-            {steps.map((step, i) => (
-              <li key={step.t} className="panel rounded-2xl px-5 py-5">
-                <div className="mono text-[11px] uppercase tracking-[0.2em] text-[#d4af37]">
-                  0{i + 1}
-                </div>
-                <h3 className="mt-2 text-lg font-semibold">{step.t}</h3>
-                <p className="mt-1 text-sm leading-relaxed text-slate-400">{step.d}</p>
-              </li>
+          </Reveal>
+          <ol className="lx-steps3">
+            {steps.map((s, i) => (
+              <Reveal as="li" key={s.t} delay={i * 140}>
+                <i>0{i + 1}</i>
+                <h3>{s.t}</h3>
+                <p>{s.d}</p>
+              </Reveal>
             ))}
           </ol>
         </section>
 
-        <section className="mx-auto max-w-6xl px-5 py-20 sm:px-6">
-          <div className="overflow-hidden rounded-[2rem] border border-[rgba(212,175,55,0.22)] bg-[radial-gradient(800px_300px_at_10%_0%,rgba(212,175,55,0.16),transparent_55%),#0b0e14] px-6 py-14 sm:px-12">
-            <h2 className="max-w-xl text-4xl leading-tight tracking-tight sm:text-5xl">
-              The Anthropic market is open.
+        <section id="roles" className="lx-block">
+          <Reveal>
+            <p className="lx-kicker">Three sides, one market</p>
+            <h2>
+              Every side <em>gets something.</em>
             </h2>
-            <p className="mt-4 max-w-lg text-slate-300">
-              Lend USDC, borrow against the token, or lock a bid at your discount. Other PreStocks
-              markets open when a book exists.
-            </p>
-            <Link
-              href="/app?pool=anthropic"
-              className="mt-8 inline-flex rounded-full bg-[#d4af37] px-6 py-3 text-sm font-semibold text-black hover:bg-[#e3c25a]"
-            >
-              Open the app
-            </Link>
+          </Reveal>
+          <div className="lx-rolelist">
+            {roles.map(({ id, tag, title, perks, cta, Anim }, i) => (
+              <article key={id} className={`lx-roleblock ${i % 2 ? "is-flip" : ""}`}>
+                <Reveal>
+                  <p className="lx-tag">
+                    0{i + 1} · {tag}
+                  </p>
+                  <h3>{title}</h3>
+                  <ul className="lx-perks">
+                    {perks.map((p) => (
+                      <li key={p}>{p}</li>
+                    ))}
+                  </ul>
+                  <Link href={cta.href} className="lx-textlink">
+                    {cta.label} →
+                  </Link>
+                </Reveal>
+                <Reveal delay={150}>
+                  <Anim />
+                </Reveal>
+              </article>
+            ))}
           </div>
+        </section>
+
+        <section id="rates" className="lx-block">
+          <Reveal>
+            <p className="lx-kicker">Interest rate model and yield distribution</p>
+            <h2>
+              A market that <em>balances itself.</em>
+            </h2>
+            <p className="lx-prose">
+              Each market sets its own rate from how much of the lending vault is borrowed. Interest
+              is then split between lenders, bidders and a bad-debt reserve, leaning toward whichever
+              side the market needs more of.
+            </p>
+          </Reveal>
+          <Reveal delay={120}>
+            <RateModel />
+          </Reveal>
+        </section>
+
+        <section className="lx-block">
+          <Reveal>
+            <div className="lx-close">
+              <p className="lx-kicker">Live on devnet</p>
+              <h2>The Anthropic market is open.</h2>
+              <p className="lx-prose">
+                Borrow against the token, lend USDC, or place a bid at your discount. Not offered to
+                US persons.
+              </p>
+              <div className="lx-cta">
+                <Link href="/app?pool=anthropic" className="lx-btn">
+                  Open the app
+                </Link>
+                <Link href="/docs" className="lx-textlink">
+                  Read the docs
+                </Link>
+              </div>
+            </div>
+          </Reveal>
         </section>
       </main>
     </SiteChrome>
