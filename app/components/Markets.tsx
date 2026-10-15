@@ -3,6 +3,7 @@
 import { useWallet } from "@solana/wallet-adapter-react";
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { CatchBrand } from "@/components/CatchMark";
 import { PriceQuote, tokenLabel } from "@/components/PriceQuote";
 import { WalletConnect } from "@/components/WalletConnect";
 import { LIQUIDATION_LTV, MAX_BORROW_LTV, formatAprPct, marketYields } from "@/lib/loan";
@@ -96,33 +97,7 @@ export function Markets({
   return (
     <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="shrink-0">
-            <img
-              src="/catch-mark.svg"
-              alt=""
-              className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
-            />
-          </Link>
-          <div>
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-              <Link href="/" className="hover:text-amber-200">
-                Catch
-              </Link>
-            </h1>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Isolated markets. Credit is capped by the bid book in that pool only.
-            </p>
-            <div className="mt-2 flex gap-4 text-xs">
-              <Link href="/" className="text-slate-500 hover:text-amber-200">
-                ← Landing
-              </Link>
-              <Link href="/docs" className="text-slate-500 hover:text-amber-200">
-                How it works
-              </Link>
-            </div>
-          </div>
-        </div>
+        <CatchBrand />
         <WalletConnect
           usdc={usdc}
           anthropic={anth}

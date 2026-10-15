@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
+import { CatchBrand } from "@/components/CatchMark";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import {
   TOKEN_PROGRAM_ID,
@@ -793,25 +794,7 @@ export function Dashboard({
   return (
     <main className="mx-auto max-w-7xl px-4 pb-16 pt-6 sm:px-6">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="shrink-0">
-            <img
-              src="/catch-mark.svg"
-              alt=""
-              className="h-12 w-12 rounded-2xl border border-[rgba(212,175,55,0.18)]"
-            />
-          </Link>
-          <div>
-            <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-              <Link href="/" className="hover:text-amber-200">
-                Catch
-              </Link>
-            </h1>
-            <p className="mt-1 max-w-xl text-sm text-slate-400">
-              Isolated markets. Credit is capped by the bid book in that pool only.
-            </p>
-          </div>
-        </div>
+        <CatchBrand />
         <WalletConnect
           usdc={usdcWallet}
           anthropic={collWallet}
@@ -821,9 +804,6 @@ export function Dashboard({
 
       <div className="mb-6">
         <div className="mb-1 flex gap-4 text-xs uppercase tracking-widest">
-          <Link href="/" className="text-slate-500 hover:text-amber-200">
-            ← Landing
-          </Link>
           {onBack ? (
             <button
               type="button"
@@ -928,10 +908,10 @@ export function Dashboard({
             <span className="mono text-lg text-emerald-400">APY {formatAprPct(lenderApr)}</span>
           </div>
           <p className="mb-4 text-sm text-slate-400">
-            Senior vault. Borrow APY is kinked: 10% at 0% used → 15% at 80% → 30% full. Deposit APY
-            is your share of that interest after the 10% reserve and the 5% senior floor, split
-            with engaged bids. Now {formatAprPct(lenderApr)} deposit with{" "}
-            {(utilization * 100).toFixed(0)}% utilized.
+            You lend USDC and earn {formatAprPct(lenderApr)}. Withdrawals are in USDC. Borrowers pay{" "}
+            {formatAprPct(marketApr)} now ({(utilization * 100).toFixed(0)}% utilization). Ten percent
+            of that interest stays in this market&apos;s reserve. The rest is shared with the bid
+            book, so the deposit rate is lower than the borrow rate.
           </p>
           <div className="mb-4 grid gap-3 sm:grid-cols-2">
             <Stat label="Your position" value={userReady ? formatUsd(deposited, 2) : "…"} />

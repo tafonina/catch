@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CatchBrand } from "@/components/CatchMark";
 
 export function SiteChrome({
   children,
@@ -13,14 +14,7 @@ export function SiteChrome({
     <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-white/10 bg-[#05070b]/75 backdrop-blur-xl">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-5 py-3.5 sm:px-6">
-          <Link href="/" className="flex items-center gap-3">
-            <img
-              src="/catch-mark.svg"
-              alt=""
-              className="h-9 w-9 rounded-xl border border-[rgba(212,175,55,0.28)]"
-            />
-            <span className="text-lg font-semibold tracking-tight">Catch</span>
-          </Link>
+          <CatchBrand />
           <nav className="flex items-center gap-5 text-sm">
             <Link
               href="/docs"
